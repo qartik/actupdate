@@ -22,6 +22,31 @@ func TestRunVersion(t *testing.T) {
 	}
 }
 
+func TestPromptConfirmDefaultsToYes(t *testing.T) {
+	var stdout bytes.Buffer
+	confirmed, err := promptConfirm(strings.NewReader("\n"), &stdout)
+	if err != nil {
+		t.Fatalf("promptConfirm: %v", err)
+	}
+	if !confirmed {
+		t.Fatal("expected empty input to confirm")
+	}
+	if got := stdout.String(); got != "Apply these updates? [Y/n]: " {
+		t.Fatalf("unexpected prompt %q", got)
+	}
+}
+
+func TestPromptConfirmRejectsNo(t *testing.T) {
+	var stdout bytes.Buffer
+	confirmed, err := promptConfirm(strings.NewReader("n\n"), &stdout)
+	if err != nil {
+		t.Fatalf("promptConfirm: %v", err)
+	}
+	if confirmed {
+		t.Fatal("expected no to reject")
+	}
+}
+
 func TestRunApplyYes(t *testing.T) {
 	repo := t.TempDir()
 	workflowDir := filepath.Join(repo, ".github", "workflows")

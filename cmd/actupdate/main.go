@@ -16,6 +16,7 @@ import (
 	gh "actupdate/internal/github"
 	"actupdate/internal/plan"
 	"actupdate/internal/workflows"
+	"golang.org/x/term"
 )
 
 const version = "0.1.0"
@@ -85,7 +86,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer, httpClient *http.Cl
 		return exitOperationalError
 	}
 
-	fmt.Fprint(out, plan.Render(report))
+	fmt.Fprint(out, plan.Render(report, plan.RenderOptions{Color: useColor(out)}))
 
 	if hadVerificationFailure {
 		return exitVerificationFailure
@@ -154,14 +155,28 @@ func resolveToken(explicit string) string {
 }
 
 func promptConfirm(in io.Reader, out io.Writer) (bool, error) {
-	fmt.Fprint(out, "Apply these updates? [y/N]: ")
+	fmt.Fprint(out, "Apply these updates? [Y/n]: ")
 	reader := bufio.NewReader(in)
 	line, err := reader.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return false, err
 	}
 	line = strings.TrimSpace(strings.ToLower(line))
+	if line == "" {
+		return true, nil
+	}
 	return line == "y" || line == "yes", nil
+}
+
+func useColor(out io.Writer) bool {
+	if os.Getenv("NO_COLOR") != "" {
+		return false
+	}
+	file, ok := out.(*os.File)
+	if !ok {
+		return false
+	}
+	return term.IsTerminal(int(file.Fd()))
 }
 
 func buildReport(ctx context.Context, scans []workflows.FileScan, client *gh.Client) (plan.Report, []workflows.Change, bool, error) {
