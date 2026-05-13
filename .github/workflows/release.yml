@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: arm64
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p dist
+          binary_name="actupdate"
+          asset_dir="dist/actupdate_${GOOS}_${GOARCH}"
+          mkdir -p "${asset_dir}"
+          go build -o "${asset_dir}/${binary_name}" ./cmd/actupdate
+          tar -C dist -czf "${asset_dir}.tar.gz" "actupdate_${GOOS}_${GOARCH}"
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: actupdate_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: dist/actupdate_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz
+
+  release:
+    name: Publish release
+    runs-on: ubuntu-24.04
+    needs: build
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+
+      - name: Collect release assets
+        run: |
+          mkdir -p release-assets
+          find dist -type f -name '*.tar.gz' -exec cp {} release-assets/ \;
+
+      - name: Publish GitHub release assets
+        uses: softprops/action-gh-release@v3
+        with:
+          files: release-assets/*.tar.gz

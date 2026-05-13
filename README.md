@@ -42,6 +42,18 @@ Flags:
 - `--github-token`: override token lookup; otherwise the tool uses
   `GITHUB_TOKEN`, then `GH_TOKEN`
 
+## Releases
+
+Push a tag like `v0.1.0` to trigger the release workflow. It builds and uploads
+tarballs for:
+
+- `linux/amd64`
+- `linux/arm64`
+- `darwin/arm64`
+
+Each release asset is named like `actupdate_linux_amd64.tar.gz` and contains the
+`actupdate` binary.
+
 ## Verification Rules
 
 - Only stable semver tags are considered
