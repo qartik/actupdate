@@ -42,6 +42,18 @@ Flags:
 - `--github-token`: override token lookup; otherwise the tool uses
   `GITHUB_TOKEN`, then `GH_TOKEN`
 
+## GitHub Auth
+
+If you see `verification failed: ... GitHub API rate limited or forbidden`,
+`actupdate` is usually running without a GitHub token or has exhausted the
+token's rate limit.
+
+If you already use `gh`, you can pass its token directly:
+
+```bash
+GITHUB_TOKEN="$(gh auth token)" actupdate
+```
+
 ## Releases
 
 Push a tag like `v0.1.0` to trigger the release workflow. It builds and uploads
