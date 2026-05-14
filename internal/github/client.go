@@ -97,57 +97,49 @@ func (c *Client) ResolveLatestMajor(ctx context.Context, repo string, currentMaj
 		}, nil
 	}
 
-	eligibleTags := tags
+	cutoff := time.Time{}
 	if cooldown > 0 {
-		cutoff := c.now().Add(-cooldown)
-		eligibleTags = make([]actionspec.StableVersion, 0, len(tags))
-		for _, tag := range tags {
-			if tag.Major <= currentMajor {
-				eligibleTags = append(eligibleTags, tag)
-				continue
-			}
-			publishedAt, err := c.tagPublishedAt(ctx, repo, tag.Original)
+		cutoff = c.now().Add(-cooldown)
+	}
+
+	for _, major := range newerMajors(tags, currentMajor) {
+		if moving, ok := findMovingMajor(tags, major); ok {
+			eligible, err := c.tagEligible(ctx, repo, moving.Original, cutoff)
 			if err != nil {
 				return Resolution{}, err
 			}
-			if !publishedAt.After(cutoff) {
-				eligibleTags = append(eligibleTags, tag)
+			if eligible {
+				return Resolution{
+					TargetRef:   moving.Original,
+					HasUpgrade:  true,
+					Reason:      "moving major tag",
+					LatestMajor: major,
+				}, nil
 			}
 		}
-	}
 
-	latestEligibleMajor := currentMajor
-	for _, tag := range eligibleTags {
-		if tag.Major > latestEligibleMajor {
-			latestEligibleMajor = tag.Major
+		best, ok := findHighestForMajor(tags, major)
+		if !ok {
+			return Resolution{}, fmt.Errorf("%s: no stable tag found for major v%d", repo, major)
+		}
+		eligible, err := c.tagEligible(ctx, repo, best.Original, cutoff)
+		if err != nil {
+			return Resolution{}, err
+		}
+		if eligible {
+			return Resolution{
+				TargetRef:   best.Original,
+				HasUpgrade:  true,
+				Reason:      "exact tag fallback",
+				LatestMajor: major,
+			}, nil
 		}
 	}
-	if latestEligibleMajor <= currentMajor {
-		return Resolution{
-			HasUpgrade:  false,
-			LatestMajor: latestMajor,
-			Reason:      "newer major tags are still within cooldown",
-		}, nil
-	}
 
-	if moving, ok := findMovingMajor(eligibleTags, latestEligibleMajor); ok {
-		return Resolution{
-			TargetRef:   moving.Original,
-			HasUpgrade:  true,
-			Reason:      "moving major tag",
-			LatestMajor: latestEligibleMajor,
-		}, nil
-	}
-
-	best, ok := findHighestForMajor(eligibleTags, latestEligibleMajor)
-	if !ok {
-		return Resolution{}, fmt.Errorf("%s: no stable tag found for latest eligible major v%d", repo, latestEligibleMajor)
-	}
 	return Resolution{
-		TargetRef:   best.Original,
-		HasUpgrade:  true,
-		Reason:      "exact tag fallback",
-		LatestMajor: latestEligibleMajor,
+		HasUpgrade:  false,
+		LatestMajor: latestMajor,
+		Reason:      "newer major tags are still within cooldown",
 	}, nil
 }
 
@@ -199,7 +191,7 @@ func (c *Client) tagPublishedAt(ctx context.Context, repo, tag string) (time.Tim
 		return cached, nil
 	}
 
-	refEndpoint, err := url.Parse(fmt.Sprintf("%s/repos/%s/git/ref/tags/%s", c.baseURL, repo, tag))
+	refEndpoint, err := c.endpointURL(repo, "git", "ref", "tags", tag)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -231,7 +223,7 @@ func (c *Client) tagPublishedAt(ctx context.Context, repo, tag string) (time.Tim
 }
 
 func (c *Client) annotatedTagTime(ctx context.Context, repo, sha string) (time.Time, error) {
-	endpoint, err := url.Parse(fmt.Sprintf("%s/repos/%s/git/tags/%s", c.baseURL, repo, sha))
+	endpoint, err := c.endpointURL(repo, "git", "tags", sha)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -248,7 +240,7 @@ func (c *Client) annotatedTagTime(ctx context.Context, repo, sha string) (time.T
 }
 
 func (c *Client) commitTime(ctx context.Context, repo, sha string) (time.Time, error) {
-	endpoint, err := url.Parse(fmt.Sprintf("%s/repos/%s/git/commits/%s", c.baseURL, repo, sha))
+	endpoint, err := c.endpointURL(repo, "git", "commits", sha)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -265,6 +257,53 @@ func (c *Client) commitTime(ctx context.Context, repo, sha string) (time.Time, e
 		return parseGitHubTime(repo, commit.Committer.Date, "committer")
 	}
 	return parseGitHubTime(repo, commit.Author.Date, "author")
+}
+
+func (c *Client) tagEligible(ctx context.Context, repo, tag string, cutoff time.Time) (bool, error) {
+	if cutoff.IsZero() {
+		return true, nil
+	}
+	publishedAt, err := c.tagPublishedAt(ctx, repo, tag)
+	if err != nil {
+		return false, err
+	}
+	return !publishedAt.After(cutoff), nil
+}
+
+func (c *Client) endpointURL(repo string, segments ...string) (*url.URL, error) {
+	base := strings.TrimRight(c.baseURL, "/")
+	path := strings.Builder{}
+	path.WriteString(base)
+	path.WriteString("/repos/")
+
+	repoParts := strings.Split(repo, "/")
+	for i, part := range repoParts {
+		if i > 0 {
+			path.WriteByte('/')
+		}
+		path.WriteString(url.PathEscape(part))
+	}
+	for _, segment := range segments {
+		path.WriteByte('/')
+		path.WriteString(url.PathEscape(segment))
+	}
+	return url.Parse(path.String())
+}
+
+func newerMajors(tags []actionspec.StableVersion, currentMajor int) []int {
+	seen := map[int]struct{}{}
+	majors := make([]int, 0)
+	for _, tag := range tags {
+		if tag.Major <= currentMajor {
+			continue
+		}
+		if _, ok := seen[tag.Major]; ok {
+			continue
+		}
+		seen[tag.Major] = struct{}{}
+		majors = append(majors, tag.Major)
+	}
+	return majors
 }
 
 func (c *Client) getJSON(req *http.Request, repo, notFoundMessage string, out any) error {

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseArgsCooldownDays(t *testing.T) {
@@ -104,6 +105,7 @@ func TestRunApplyYes(t *testing.T) {
 }
 
 func TestRunApplyYesWithCooldownDays(t *testing.T) {
+	oldEnough := time.Now().Add(-10 * 24 * time.Hour).UTC().Format(time.RFC3339)
 	repo := t.TempDir()
 	workflowDir := filepath.Join(repo, ".github", "workflows")
 	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
@@ -122,7 +124,7 @@ func TestRunApplyYesWithCooldownDays(t *testing.T) {
 		case "/repos/actions/checkout/git/ref/tags/v6":
 			fmt.Fprint(w, `{"object":{"type":"tag","sha":"tag-v6"}}`)
 		case "/repos/actions/checkout/git/tags/tag-v6":
-			fmt.Fprint(w, `{"tagger":{"date":"2026-05-01T12:00:00Z"}}`)
+			fmt.Fprintf(w, `{"tagger":{"date":"%s"}}`, oldEnough)
 		default:
 			http.NotFound(w, r)
 		}
@@ -146,6 +148,8 @@ func TestRunApplyYesWithCooldownDays(t *testing.T) {
 }
 
 func TestRunCooldownDaysLeavesTooNewMajorUnchanged(t *testing.T) {
+	tooNewMoving := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+	tooNewExact := time.Now().Add(-2 * 24 * time.Hour).UTC().Format(time.RFC3339)
 	repo := t.TempDir()
 	workflowDir := filepath.Join(repo, ".github", "workflows")
 	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
@@ -166,9 +170,9 @@ func TestRunCooldownDaysLeavesTooNewMajorUnchanged(t *testing.T) {
 		case "/repos/actions/checkout/git/ref/tags/v6.2.1":
 			fmt.Fprint(w, `{"object":{"type":"tag","sha":"tag-v621"}}`)
 		case "/repos/actions/checkout/git/tags/tag-v6":
-			fmt.Fprint(w, `{"tagger":{"date":"2026-05-10T12:00:00Z"}}`)
+			fmt.Fprintf(w, `{"tagger":{"date":"%s"}}`, tooNewMoving)
 		case "/repos/actions/checkout/git/tags/tag-v621":
-			fmt.Fprint(w, `{"tagger":{"date":"2026-05-11T12:00:00Z"}}`)
+			fmt.Fprintf(w, `{"tagger":{"date":"%s"}}`, tooNewExact)
 		default:
 			http.NotFound(w, r)
 		}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -241,12 +242,45 @@ func TestResolveLatestMajorCachesTagTimestamps(t *testing.T) {
 	}
 }
 
+func TestResolveLatestMajorEscapesTagPathSegments(t *testing.T) {
+	now := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
+	hits := map[string]int{}
+	escapedHits := map[string]int{}
+	server := newGitHubTestServer(t, githubTestData{
+		tags: []string{"release/6", "v4"},
+		refs: map[string]gitRef{
+			"release/6": {Type: "tag", SHA: "tag-release-6"},
+		},
+		tagObjects: map[string]string{
+			"tag-release-6": now.Add(-10 * 24 * time.Hour).Format(time.RFC3339),
+		},
+		hits:        hits,
+		escapedHits: escapedHits,
+	})
+	defer server.Close()
+
+	client := NewClient(server.Client(), server.URL, "")
+	client.now = func() time.Time { return now }
+
+	publishedAt, err := client.tagPublishedAt(context.Background(), "actions/checkout", "release/6")
+	if err != nil {
+		t.Fatalf("tagPublishedAt: %v", err)
+	}
+	if publishedAt.IsZero() {
+		t.Fatal("expected publish time")
+	}
+	if escapedHits["/repos/actions/checkout/git/ref/tags/release%2F6"] != 1 {
+		t.Fatalf("expected escaped ref lookup, got %#v", escapedHits)
+	}
+}
+
 type githubTestData struct {
-	tags       []string
-	refs       map[string]gitRef
-	tagObjects map[string]string
-	commits    map[string]string
-	hits       map[string]int
+	tags        []string
+	refs        map[string]gitRef
+	tagObjects  map[string]string
+	commits     map[string]string
+	hits        map[string]int
+	escapedHits map[string]int
 }
 
 type gitRef struct {
@@ -261,6 +295,9 @@ func newGitHubTestServer(t *testing.T, data githubTestData) *httptest.Server {
 		if data.hits != nil {
 			data.hits[r.URL.Path]++
 		}
+		if data.escapedHits != nil {
+			data.escapedHits[r.URL.EscapedPath()]++
+		}
 
 		switch {
 		case r.URL.Path == "/repos/actions/checkout/tags":
@@ -274,8 +311,12 @@ func newGitHubTestServer(t *testing.T, data githubTestData) *httptest.Server {
 			writeJSON(t, w, items)
 			return
 		case strings.HasPrefix(r.URL.Path, "/repos/actions/checkout/git/ref/tags/"):
-			tag := strings.TrimPrefix(r.URL.Path, "/repos/actions/checkout/git/ref/tags/")
-			ref, ok := data.refs[tag]
+			tag := strings.TrimPrefix(r.URL.EscapedPath(), "/repos/actions/checkout/git/ref/tags/")
+			unescapedTag, err := url.PathUnescape(tag)
+			if err != nil {
+				t.Fatalf("unescape tag: %v", err)
+			}
+			ref, ok := data.refs[unescapedTag]
 			if !ok {
 				http.NotFound(w, r)
 				return
