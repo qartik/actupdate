@@ -7,10 +7,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"actupdate/internal/actionspec"
 	gh "actupdate/internal/github"
@@ -28,10 +30,13 @@ const (
 	exitVerificationFailure
 )
 
+const maxCooldownDays = int64(math.MaxInt64 / int64(24*time.Hour))
+
 type cliOptions struct {
-	Repo        string
-	Yes         bool
-	GitHubToken string
+	Repo         string
+	Yes          bool
+	GitHubToken  string
+	CooldownDays int
 }
 
 func main() {
@@ -79,8 +84,14 @@ func run(args []string, in io.Reader, out, errOut io.Writer, httpClient *http.Cl
 		return exitInvalidInput
 	}
 
+	cooldown, err := cooldownDuration(opts.CooldownDays)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return exitInvalidInput
+	}
+
 	client := gh.NewClient(httpClient, githubBaseURL, resolveToken(opts.GitHubToken))
-	report, changes, hadVerificationFailure, err := buildReport(context.Background(), scans, client)
+	report, changes, hadVerificationFailure, err := buildReport(context.Background(), scans, client, cooldown)
 	if err != nil {
 		fmt.Fprintf(errOut, "failed to build update plan: %v\n", err)
 		return exitOperationalError
@@ -135,13 +146,30 @@ func parseArgs(args []string) (*cliOptions, error) {
 	fs.StringVar(&opts.Repo, "repo", "", "path to repository root")
 	fs.BoolVar(&opts.Yes, "yes", false, "apply without prompting")
 	fs.StringVar(&opts.GitHubToken, "github-token", "", "GitHub token override")
+	fs.IntVar(&opts.CooldownDays, "cooldown-days", 0, "minimum tag age in days before upgrading")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
 	if fs.NArg() != 0 {
 		return nil, fmt.Errorf("unexpected positional arguments: %s", strings.Join(fs.Args(), " "))
 	}
+	if opts.CooldownDays < 0 {
+		return nil, fmt.Errorf("--cooldown-days must be non-negative")
+	}
+	if int64(opts.CooldownDays) > maxCooldownDays {
+		return nil, fmt.Errorf("--cooldown-days must be at most %d", maxCooldownDays)
+	}
 	return opts, nil
+}
+
+func cooldownDuration(days int) (time.Duration, error) {
+	if days < 0 {
+		return 0, fmt.Errorf("--cooldown-days must be non-negative")
+	}
+	if int64(days) > maxCooldownDays {
+		return 0, fmt.Errorf("--cooldown-days must be at most %d", maxCooldownDays)
+	}
+	return time.Duration(days) * 24 * time.Hour, nil
 }
 
 func resolveToken(explicit string) string {
@@ -179,7 +207,7 @@ func useColor(out io.Writer) bool {
 	return term.IsTerminal(int(file.Fd()))
 }
 
-func buildReport(ctx context.Context, scans []workflows.FileScan, client *gh.Client) (plan.Report, []workflows.Change, bool, error) {
+func buildReport(ctx context.Context, scans []workflows.FileScan, client *gh.Client, cooldown time.Duration) (plan.Report, []workflows.Change, bool, error) {
 	report := plan.Report{}
 	var changes []workflows.Change
 	repoResults := map[string]repoOutcome{}
@@ -236,7 +264,7 @@ func buildReport(ctx context.Context, scans []workflows.FileScan, client *gh.Cli
 
 			outcome, ok := repoResults[spec.Repo]
 			if !ok {
-				resolution, resolveErr := client.ResolveLatestMajor(ctx, spec.Repo, currentMajor)
+				resolution, resolveErr := client.ResolveLatestMajor(ctx, spec.Repo, currentMajor, cooldown)
 				outcome = repoOutcome{Resolution: resolution, Err: resolveErr}
 				repoResults[spec.Repo] = outcome
 			}
@@ -251,7 +279,7 @@ func buildReport(ctx context.Context, scans []workflows.FileScan, client *gh.Cli
 
 			if !outcome.Resolution.HasUpgrade {
 				entry.Status = plan.StatusUnchanged
-				entry.Reason = "already on latest stable major"
+				entry.Reason = outcome.Resolution.Reason
 				report.Add(entry)
 				continue
 			}
