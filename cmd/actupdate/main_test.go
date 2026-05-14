@@ -28,6 +28,13 @@ func TestParseArgsRejectsNegativeCooldownDays(t *testing.T) {
 	}
 }
 
+func TestParseArgsRejectsOverflowingCooldownDays(t *testing.T) {
+	tooLarge := fmt.Sprintf("%d", maxCooldownDays+1)
+	if _, err := parseArgs([]string{"--cooldown-days", tooLarge}); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func TestRunVersion(t *testing.T) {
 	var stdout bytes.Buffer
 	exitCode := run([]string{"version"}, strings.NewReader(""), &stdout, &bytes.Buffer{}, http.DefaultClient, "")

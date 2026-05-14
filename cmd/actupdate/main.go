@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -28,6 +29,8 @@ const (
 	exitInvalidInput
 	exitVerificationFailure
 )
+
+const maxCooldownDays = int64(math.MaxInt64 / int64(24*time.Hour))
 
 type cliOptions struct {
 	Repo         string
@@ -81,8 +84,14 @@ func run(args []string, in io.Reader, out, errOut io.Writer, httpClient *http.Cl
 		return exitInvalidInput
 	}
 
+	cooldown, err := cooldownDuration(opts.CooldownDays)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return exitInvalidInput
+	}
+
 	client := gh.NewClient(httpClient, githubBaseURL, resolveToken(opts.GitHubToken))
-	report, changes, hadVerificationFailure, err := buildReport(context.Background(), scans, client, time.Duration(opts.CooldownDays)*24*time.Hour)
+	report, changes, hadVerificationFailure, err := buildReport(context.Background(), scans, client, cooldown)
 	if err != nil {
 		fmt.Fprintf(errOut, "failed to build update plan: %v\n", err)
 		return exitOperationalError
@@ -147,7 +156,20 @@ func parseArgs(args []string) (*cliOptions, error) {
 	if opts.CooldownDays < 0 {
 		return nil, fmt.Errorf("--cooldown-days must be non-negative")
 	}
+	if int64(opts.CooldownDays) > maxCooldownDays {
+		return nil, fmt.Errorf("--cooldown-days must be at most %d", maxCooldownDays)
+	}
 	return opts, nil
+}
+
+func cooldownDuration(days int) (time.Duration, error) {
+	if days < 0 {
+		return 0, fmt.Errorf("--cooldown-days must be non-negative")
+	}
+	if int64(days) > maxCooldownDays {
+		return 0, fmt.Errorf("--cooldown-days must be at most %d", maxCooldownDays)
+	}
+	return time.Duration(days) * 24 * time.Hour, nil
 }
 
 func resolveToken(explicit string) string {
