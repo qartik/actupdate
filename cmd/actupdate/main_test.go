@@ -11,6 +11,22 @@ import (
 	"testing"
 )
 
+func TestParseArgsCooldownDays(t *testing.T) {
+	opts, err := parseArgs([]string{"--cooldown-days", "7"})
+	if err != nil {
+		t.Fatalf("parse args: %v", err)
+	}
+	if opts.CooldownDays != 7 {
+		t.Fatalf("expected cooldown 7, got %d", opts.CooldownDays)
+	}
+}
+
+func TestParseArgsRejectsNegativeCooldownDays(t *testing.T) {
+	if _, err := parseArgs([]string{"--cooldown-days", "-1"}); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func TestRunVersion(t *testing.T) {
 	var stdout bytes.Buffer
 	exitCode := run([]string{"version"}, strings.NewReader(""), &stdout, &bytes.Buffer{}, http.DefaultClient, "")
@@ -84,6 +100,97 @@ func TestRunApplyYes(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "actions/checkout@v4 -> @v6") {
 		t.Fatalf("expected plan output, got %q", stdout.String())
+	}
+}
+
+func TestRunApplyYesWithCooldownDays(t *testing.T) {
+	repo := t.TempDir()
+	workflowDir := filepath.Join(repo, ".github", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	workflowPath := filepath.Join(workflowDir, "release.yml")
+	original := "steps:\n  - uses: actions/checkout@v4\n"
+	if err := os.WriteFile(workflowPath, []byte(original), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/actions/checkout/tags":
+			fmt.Fprint(w, `[{"name":"v6"},{"name":"v4"}]`)
+		case "/repos/actions/checkout/git/ref/tags/v6":
+			fmt.Fprint(w, `{"object":{"type":"tag","sha":"tag-v6"}}`)
+		case "/repos/actions/checkout/git/tags/tag-v6":
+			fmt.Fprint(w, `{"tagger":{"date":"2026-05-01T12:00:00Z"}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--repo", repo, "--yes", "--cooldown-days", "7"}, strings.NewReader(""), &stdout, &stderr, server.Client(), server.URL)
+	if exitCode != exitOK {
+		t.Fatalf("expected exit 0, got %d stderr=%s", exitCode, stderr.String())
+	}
+
+	updated, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatalf("read workflow: %v", err)
+	}
+	if got := string(updated); !strings.Contains(got, "actions/checkout@v6") {
+		t.Fatalf("expected updated workflow, got %q", got)
+	}
+}
+
+func TestRunCooldownDaysLeavesTooNewMajorUnchanged(t *testing.T) {
+	repo := t.TempDir()
+	workflowDir := filepath.Join(repo, ".github", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	workflowPath := filepath.Join(workflowDir, "release.yml")
+	original := "steps:\n  - uses: actions/checkout@v4\n"
+	if err := os.WriteFile(workflowPath, []byte(original), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/actions/checkout/tags":
+			fmt.Fprint(w, `[{"name":"v6"},{"name":"v6.2.1"},{"name":"v4"}]`)
+		case "/repos/actions/checkout/git/ref/tags/v6":
+			fmt.Fprint(w, `{"object":{"type":"tag","sha":"tag-v6"}}`)
+		case "/repos/actions/checkout/git/ref/tags/v6.2.1":
+			fmt.Fprint(w, `{"object":{"type":"tag","sha":"tag-v621"}}`)
+		case "/repos/actions/checkout/git/tags/tag-v6":
+			fmt.Fprint(w, `{"tagger":{"date":"2026-05-10T12:00:00Z"}}`)
+		case "/repos/actions/checkout/git/tags/tag-v621":
+			fmt.Fprint(w, `{"tagger":{"date":"2026-05-11T12:00:00Z"}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--repo", repo, "--yes", "--cooldown-days", "7"}, strings.NewReader(""), &stdout, &stderr, server.Client(), server.URL)
+	if exitCode != exitOK {
+		t.Fatalf("expected exit 0, got %d stderr=%s", exitCode, stderr.String())
+	}
+
+	updated, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatalf("read workflow: %v", err)
+	}
+	if string(updated) != original {
+		t.Fatalf("workflow should remain unchanged, got %q", string(updated))
+	}
+	if !strings.Contains(stdout.String(), "unchanged: newer major tags are still within cooldown") {
+		t.Fatalf("expected cooldown reason in output, got %q", stdout.String())
 	}
 }
 
