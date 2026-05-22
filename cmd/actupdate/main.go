@@ -210,7 +210,6 @@ func useColor(out io.Writer) bool {
 func buildReport(ctx context.Context, scans []workflows.FileScan, client *gh.Client, cooldown time.Duration) (plan.Report, []workflows.Change, bool, error) {
 	report := plan.Report{}
 	var changes []workflows.Change
-	repoResults := map[string]repoOutcome{}
 	hadVerificationFailure := false
 
 	for _, scan := range scans {
@@ -254,7 +253,7 @@ func buildReport(ctx context.Context, scans []workflows.FileScan, client *gh.Cli
 				continue
 			}
 
-			currentMajor, err := actionspec.ParseMajor(spec.Ref)
+			currentVersion, err := actionspec.ParseStableVersion(spec.Ref)
 			if err != nil {
 				entry.Status = plan.StatusSkipped
 				entry.Reason = "non-semver ref"
@@ -262,12 +261,8 @@ func buildReport(ctx context.Context, scans []workflows.FileScan, client *gh.Cli
 				continue
 			}
 
-			outcome, ok := repoResults[spec.Repo]
-			if !ok {
-				resolution, resolveErr := client.ResolveLatestMajor(ctx, spec.Repo, currentMajor, cooldown)
-				outcome = repoOutcome{Resolution: resolution, Err: resolveErr}
-				repoResults[spec.Repo] = outcome
-			}
+			resolution, resolveErr := client.ResolveLatestStable(ctx, spec.Repo, currentVersion, cooldown)
+			outcome := repoOutcome{Resolution: resolution, Err: resolveErr}
 
 			if outcome.Err != nil {
 				entry.Status = plan.StatusError

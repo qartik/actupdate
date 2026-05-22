@@ -143,6 +143,99 @@ func (c *Client) ResolveLatestMajor(ctx context.Context, repo string, currentMaj
 	}, nil
 }
 
+func (c *Client) ResolveLatestStable(ctx context.Context, repo string, current actionspec.StableVersion, cooldown time.Duration) (Resolution, error) {
+	tags, err := c.stableTags(ctx, repo)
+	if err != nil {
+		return Resolution{}, err
+	}
+	if len(tags) == 0 {
+		return Resolution{}, fmt.Errorf("%s: no stable semver tags found", repo)
+	}
+
+	latestMajor := current.Major
+	for _, tag := range tags {
+		if tag.Major > latestMajor {
+			latestMajor = tag.Major
+		}
+	}
+
+	cutoff := time.Time{}
+	if cooldown > 0 {
+		cutoff = c.now().Add(-cooldown)
+	}
+
+	foundBlockedNewerMajor := false
+	for _, major := range newerMajors(tags, current.Major) {
+		if moving, ok := findMovingMajor(tags, major); ok {
+			eligible, err := c.tagEligible(ctx, repo, moving.Original, cutoff)
+			if err != nil {
+				return Resolution{}, err
+			}
+			if eligible {
+				return Resolution{
+					TargetRef:   moving.Original,
+					HasUpgrade:  true,
+					Reason:      "moving major tag",
+					LatestMajor: major,
+				}, nil
+			}
+			foundBlockedNewerMajor = true
+		}
+
+		best, ok := findHighestForMajor(tags, major)
+		if !ok {
+			return Resolution{}, fmt.Errorf("%s: no stable tag found for major v%d", repo, major)
+		}
+		eligible, err := c.tagEligible(ctx, repo, best.Original, cutoff)
+		if err != nil {
+			return Resolution{}, err
+		}
+		if eligible {
+			return Resolution{
+				TargetRef:   best.Original,
+				HasUpgrade:  true,
+				Reason:      "exact tag fallback",
+				LatestMajor: major,
+			}, nil
+		}
+		foundBlockedNewerMajor = true
+	}
+
+	bestCurrentMajor, ok := findHighestForMajor(tags, current.Major)
+	if ok && isSameMajorExactUpgrade(current, bestCurrentMajor) {
+		eligible, err := c.tagEligible(ctx, repo, bestCurrentMajor.Original, cutoff)
+		if err != nil {
+			return Resolution{}, err
+		}
+		if eligible {
+			return Resolution{
+				TargetRef:   bestCurrentMajor.Original,
+				HasUpgrade:  true,
+				Reason:      "newer stable version in current major",
+				LatestMajor: latestMajor,
+			}, nil
+		}
+		return Resolution{
+			HasUpgrade:  false,
+			LatestMajor: latestMajor,
+			Reason:      "newer stable tags in current major are still within cooldown",
+		}, nil
+	}
+	if foundBlockedNewerMajor {
+		return Resolution{
+			HasUpgrade:  false,
+			LatestMajor: latestMajor,
+			Reason:      "newer major tags are still within cooldown",
+		}, nil
+	}
+
+	return Resolution{
+		HasUpgrade:  false,
+		LatestMajor: latestMajor,
+		Reason:      "already on latest stable version",
+	}, nil
+}
+
 func (c *Client) stableTags(ctx context.Context, repo string) ([]actionspec.StableVersion, error) {
 	if cached, ok := c.cache[repo]; ok {
 		return cached, nil
@@ -390,4 +483,14 @@ func findHighestForMajor(tags []actionspec.StableVersion, major int) (actionspec
 
 func isMovingMajor(tag actionspec.StableVersion) bool {
 	return !tag.HasMinor && !tag.HasPatch
+}
+
+func isSameMajorExactUpgrade(current, candidate actionspec.StableVersion) bool {
+	if current.Major != candidate.Major {
+		return false
+	}
+	if isMovingMajor(current) || isMovingMajor(candidate) {
+		return false
+	}
+	return compareVersionDesc(current, candidate) > 0
 }

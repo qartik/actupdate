@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"actupdate/internal/actionspec"
 )
 
 func TestResolveLatestMajorPrefersMovingTag(t *testing.T) {
@@ -41,6 +43,41 @@ func TestResolveLatestMajorFallsBackToExactTag(t *testing.T) {
 	}
 	if !result.HasUpgrade || result.TargetRef != "v6.2.1" || result.Reason != "exact tag fallback" {
 		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestResolveLatestStableUpdatesWithinCurrentMajor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"name":"v3.3"},{"name":"v3.0"},{"name":"v2.9"}]`)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client(), server.URL, "")
+	result, err := client.ResolveLatestStable(context.Background(), "pypa/cibuildwheel", mustParseStableVersion(t, "v3.0"), 0)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !result.HasUpgrade || result.TargetRef != "v3.3" || result.Reason != "newer stable version in current major" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestResolveLatestStableLeavesCurrentMajorMovingTagUnchanged(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"name":"v3.3"},{"name":"v3"},{"name":"v2.9"}]`)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client(), server.URL, "")
+	result, err := client.ResolveLatestStable(context.Background(), "pypa/cibuildwheel", mustParseStableVersion(t, "v3"), 0)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if result.HasUpgrade {
+		t.Fatalf("expected no upgrade, got %+v", result)
+	}
+	if result.Reason != "already on latest stable version" {
+		t.Fatalf("unexpected reason: %q", result.Reason)
 	}
 }
 
@@ -272,6 +309,15 @@ func TestResolveLatestMajorEscapesTagPathSegments(t *testing.T) {
 	if escapedHits["/repos/actions/checkout/git/ref/tags/release%2F6"] != 1 {
 		t.Fatalf("expected escaped ref lookup, got %#v", escapedHits)
 	}
+}
+
+func mustParseStableVersion(t *testing.T, ref string) actionspec.StableVersion {
+	t.Helper()
+	version, err := actionspec.ParseStableVersion(ref)
+	if err != nil {
+		t.Fatalf("parse stable version %q: %v", ref, err)
+	}
+	return version
 }
 
 type githubTestData struct {

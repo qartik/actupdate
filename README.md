@@ -1,7 +1,7 @@
 # actupdate
 
 `actupdate` updates GitHub Action references in workflow YAML files to the latest
-stable major version.
+eligible stable version.
 
 ## What It Does
 
@@ -76,10 +76,11 @@ Each release asset is named like `actupdate_linux_amd64.tar.gz` and contains the
 
 - Only stable semver tags are considered
 - Pre-release tags such as `-rc`, `-beta`, and `-alpha` are ignored
-- Updates only move to the latest stable major
+- Updates move to the latest eligible stable version
 - `--cooldown-days` can exclude newer tags until they have aged past the
   configured threshold
-- Same-major patch or minor bumps are not applied in v1
+- When a newer major exists, moving major tags such as `v6` are preferred over
+  exact tags such as `v6.2.1`
 - If any candidate update cannot be verified, the tool prints the failures and
   does not rewrite any files
 

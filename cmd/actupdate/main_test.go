@@ -205,6 +205,47 @@ func TestRunCooldownDaysLeavesTooNewMajorUnchanged(t *testing.T) {
 	}
 }
 
+func TestRunUpdatesOlderExactTagEvenWhenSameRepoHasNewerRef(t *testing.T) {
+	repo := t.TempDir()
+	workflowDir := filepath.Join(repo, ".github", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	workflowPath := filepath.Join(workflowDir, "build_wheels.yml")
+	original := "steps:\n  - uses: pypa/cibuildwheel@v3.3\n  - uses: pypa/cibuildwheel@v3.0\n"
+	if err := os.WriteFile(workflowPath, []byte(original), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/pypa/cibuildwheel/tags" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `[{"name":"v3.3"},{"name":"v3.0"},{"name":"v2.9"}]`)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--repo", repo, "--yes"}, strings.NewReader(""), &stdout, &stderr, server.Client(), server.URL)
+	if exitCode != exitOK {
+		t.Fatalf("expected exit 0, got %d stderr=%s", exitCode, stderr.String())
+	}
+
+	updated, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatalf("read workflow: %v", err)
+	}
+	got := string(updated)
+	if strings.Count(got, "pypa/cibuildwheel@v3.3") != 2 {
+		t.Fatalf("expected both refs to end at v3.3, got %q", got)
+	}
+	if !strings.Contains(stdout.String(), "pypa/cibuildwheel@v3.0 -> @v3.3") {
+		t.Fatalf("expected same-major upgrade in output, got %q", stdout.String())
+	}
+}
+
 func TestRunVerificationFailurePreventsWrites(t *testing.T) {
 	repo := t.TempDir()
 	workflowDir := filepath.Join(repo, ".github", "workflows")
