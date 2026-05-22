@@ -81,6 +81,44 @@ func TestResolveLatestStableLeavesCurrentMajorMovingTagUnchanged(t *testing.T) {
 	}
 }
 
+func TestResolveLatestStableReportsPublishedLatestMajor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"name":"v6.2.1"},{"name":"v6"},{"name":"v5.9"}]`)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client(), server.URL, "")
+	result, err := client.ResolveLatestStable(context.Background(), "actions/checkout", mustParseStableVersion(t, "v99.0.0"), 0)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if result.HasUpgrade {
+		t.Fatalf("expected no upgrade, got %+v", result)
+	}
+	if result.LatestMajor != 6 {
+		t.Fatalf("expected published latest major 6, got %d", result.LatestMajor)
+	}
+}
+
+func TestResolveLatestStableTreatsEquivalentExactTagsAsUnchanged(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"name":"v3.0"},{"name":"v3.0.0"},{"name":"v2.9"}]`)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client(), server.URL, "")
+	result, err := client.ResolveLatestStable(context.Background(), "pypa/cibuildwheel", mustParseStableVersion(t, "v3.0.0"), 0)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if result.HasUpgrade {
+		t.Fatalf("expected no upgrade, got %+v", result)
+	}
+	if result.TargetRef != "" {
+		t.Fatalf("expected no target ref, got %q", result.TargetRef)
+	}
+}
+
 func TestResolveLatestMajorIgnoresPrerelease(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `[{"name":"v6.0.0-rc1"},{"name":"v5"},{"name":"v4"}]`)

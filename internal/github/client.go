@@ -83,12 +83,7 @@ func (c *Client) ResolveLatestMajor(ctx context.Context, repo string, currentMaj
 		return Resolution{}, fmt.Errorf("%s: no stable semver tags found", repo)
 	}
 
-	latestMajor := currentMajor
-	for _, tag := range tags {
-		if tag.Major > latestMajor {
-			latestMajor = tag.Major
-		}
-	}
+	latestMajor := latestPublishedMajor(tags)
 	if latestMajor <= currentMajor {
 		return Resolution{
 			HasUpgrade:  false,
@@ -152,12 +147,7 @@ func (c *Client) ResolveLatestStable(ctx context.Context, repo string, current a
 		return Resolution{}, fmt.Errorf("%s: no stable semver tags found", repo)
 	}
 
-	latestMajor := current.Major
-	for _, tag := range tags {
-		if tag.Major > latestMajor {
-			latestMajor = tag.Major
-		}
-	}
+	latestMajor := latestPublishedMajor(tags)
 
 	cutoff := time.Time{}
 	if cooldown > 0 {
@@ -454,6 +444,18 @@ func compareVersionDesc(a, b actionspec.StableVersion) int {
 		}
 		return 1
 	}
+	if a.HasMinor != b.HasMinor {
+		if a.HasMinor {
+			return -1
+		}
+		return 1
+	}
+	if a.HasPatch != b.HasPatch {
+		if a.HasPatch {
+			return -1
+		}
+		return 1
+	}
 	if strings.HasPrefix(a.Original, "v") && !strings.HasPrefix(b.Original, "v") {
 		return -1
 	}
@@ -493,4 +495,8 @@ func isSameMajorExactUpgrade(current, candidate actionspec.StableVersion) bool {
 		return false
 	}
 	return compareVersionDesc(current, candidate) > 0
+}
+
+func latestPublishedMajor(tags []actionspec.StableVersion) int {
+	return tags[0].Major
 }
