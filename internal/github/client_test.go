@@ -228,6 +228,90 @@ func TestResolveLatestMajorWithCooldownFallsBackToExactTagWhenMovingTagBlocked(t
 	}
 }
 
+func TestResolveLatestMajorWithCooldownSkipsMovingOnlyBlockedMajor(t *testing.T) {
+	now := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
+	server := newGitHubTestServer(t, githubTestData{
+		tags: []string{"v7", "v6.2.1", "v4"},
+		refs: map[string]gitRef{
+			"v7":     {Type: "tag", SHA: "tag-v7"},
+			"v6.2.1": {Type: "tag", SHA: "tag-v621"},
+		},
+		tagObjects: map[string]string{
+			"tag-v7":   now.Add(-2 * 24 * time.Hour).Format(time.RFC3339),
+			"tag-v621": now.Add(-9 * 24 * time.Hour).Format(time.RFC3339),
+		},
+	})
+	defer server.Close()
+
+	client := NewClient(server.Client(), server.URL, "")
+	client.now = func() time.Time { return now }
+
+	result, err := client.ResolveLatestMajor(context.Background(), "actions/checkout", 4, 7*24*time.Hour)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !result.HasUpgrade || result.TargetRef != "v6.2.1" || result.Reason != "exact tag fallback" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestResolveLatestMajorWithCooldownMovingOnlyBlockedMajorReturnsCooldown(t *testing.T) {
+	now := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
+	server := newGitHubTestServer(t, githubTestData{
+		tags: []string{"v6", "v4"},
+		refs: map[string]gitRef{
+			"v6": {Type: "tag", SHA: "tag-v6"},
+		},
+		tagObjects: map[string]string{
+			"tag-v6": now.Add(-2 * 24 * time.Hour).Format(time.RFC3339),
+		},
+	})
+	defer server.Close()
+
+	client := NewClient(server.Client(), server.URL, "")
+	client.now = func() time.Time { return now }
+
+	result, err := client.ResolveLatestMajor(context.Background(), "actions/checkout", 4, 7*24*time.Hour)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if result.HasUpgrade {
+		t.Fatalf("expected no upgrade, got %+v", result)
+	}
+	if result.Reason != "newer major tags are still within cooldown" {
+		t.Fatalf("unexpected reason: %q", result.Reason)
+	}
+}
+
+func TestResolvePoliciesMatchReferenceModel(t *testing.T) {
+	for currentMajor := 1; currentMajor <= 3; currentMajor++ {
+		for currentKind := 0; currentKind < 2; currentKind++ {
+			for currentState := 0; currentState <= 8; currentState++ {
+				for newerState := 0; newerState <= 8; newerState++ {
+					for newestState := 0; newestState <= 8; newestState++ {
+						candidates := makePolicyCandidates(currentMajor, currentState, newerState, newestState)
+						current := makeCurrentVersion(currentMajor, currentKind)
+
+						gotMajor := resolveLatestMajorPolicy(currentMajor, candidates)
+						wantMajor := resolveLatestMajorPolicyModel(currentMajor, candidates)
+						if gotMajor != wantMajor {
+							t.Fatalf("major policy mismatch currentMajor=%d currentState=%d newerState=%d newestState=%d got=%+v want=%+v",
+								currentMajor, currentState, newerState, newestState, gotMajor, wantMajor)
+						}
+
+						gotStable := resolveLatestStablePolicy(current, candidates)
+						wantStable := resolveLatestStablePolicyModel(current, candidates)
+						if gotStable != wantStable {
+							t.Fatalf("stable policy mismatch current=%+v currentState=%d newerState=%d newestState=%d got=%+v want=%+v",
+								current, currentState, newerState, newestState, gotStable, wantStable)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
 func TestResolveLatestMajorWithCooldownSkipsTooNewMajor(t *testing.T) {
 	now := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
 	server := newGitHubTestServer(t, githubTestData{
@@ -377,12 +461,176 @@ func TestResolveLatestMajorEscapesTagPathSegments(t *testing.T) {
 }
 
 func mustParseStableVersion(t *testing.T, ref string) actionspec.StableVersion {
-	t.Helper()
+	if t != nil {
+		t.Helper()
+	}
 	version, err := actionspec.ParseStableVersion(ref)
 	if err != nil {
-		t.Fatalf("parse stable version %q: %v", ref, err)
+		if t != nil {
+			t.Fatalf("parse stable version %q: %v", ref, err)
+		}
+		panic(fmt.Sprintf("parse stable version %q: %v", ref, err))
 	}
 	return version
+}
+
+func makePolicyCandidates(currentMajor, currentState, newerState, newestState int) []majorCandidates {
+	states := []struct {
+		major int
+		state int
+	}{
+		{currentMajor + 2, newestState},
+		{currentMajor + 1, newerState},
+		{currentMajor, currentState},
+	}
+	candidates := make([]majorCandidates, 0, len(states))
+	for _, item := range states {
+		candidate, ok := candidateFromState(item.major, item.state)
+		if ok {
+			candidates = append(candidates, candidate)
+		}
+	}
+	return candidates
+}
+
+func candidateFromState(major, state int) (majorCandidates, bool) {
+	candidate := majorCandidates{Major: major}
+	switch state {
+	case 0:
+		return majorCandidates{}, false
+	case 1:
+		candidate.Moving = mustParseStableVersion(nil, fmt.Sprintf("v%d", major))
+		candidate.HasMoving = true
+		candidate.MovingEligible = true
+	case 2:
+		candidate.Moving = mustParseStableVersion(nil, fmt.Sprintf("v%d", major))
+		candidate.HasMoving = true
+	case 3:
+		candidate.Exact = mustParseStableVersion(nil, fmt.Sprintf("v%d.2.0", major))
+		candidate.HasExact = true
+		candidate.ExactEligible = true
+	case 4:
+		candidate.Exact = mustParseStableVersion(nil, fmt.Sprintf("v%d.2.0", major))
+		candidate.HasExact = true
+	case 5:
+		candidate.Moving = mustParseStableVersion(nil, fmt.Sprintf("v%d", major))
+		candidate.HasMoving = true
+		candidate.MovingEligible = true
+		candidate.Exact = mustParseStableVersion(nil, fmt.Sprintf("v%d.2.0", major))
+		candidate.HasExact = true
+		candidate.ExactEligible = true
+	case 6:
+		candidate.Moving = mustParseStableVersion(nil, fmt.Sprintf("v%d", major))
+		candidate.HasMoving = true
+		candidate.Exact = mustParseStableVersion(nil, fmt.Sprintf("v%d.2.0", major))
+		candidate.HasExact = true
+		candidate.ExactEligible = true
+	case 7:
+		candidate.Moving = mustParseStableVersion(nil, fmt.Sprintf("v%d", major))
+		candidate.HasMoving = true
+		candidate.Exact = mustParseStableVersion(nil, fmt.Sprintf("v%d.2.0", major))
+		candidate.HasExact = true
+	case 8:
+		candidate.Moving = mustParseStableVersion(nil, fmt.Sprintf("v%d", major))
+		candidate.HasMoving = true
+		candidate.MovingEligible = true
+		candidate.Exact = mustParseStableVersion(nil, fmt.Sprintf("v%d.2.0", major))
+		candidate.HasExact = true
+	default:
+		panic(fmt.Sprintf("unknown state %d", state))
+	}
+	return candidate, true
+}
+
+func makeCurrentVersion(currentMajor, currentKind int) actionspec.StableVersion {
+	if currentKind == 0 {
+		return mustParseStableVersion(nil, fmt.Sprintf("v%d", currentMajor))
+	}
+	return mustParseStableVersion(nil, fmt.Sprintf("v%d.1.0", currentMajor))
+}
+
+func resolveLatestMajorPolicyModel(currentMajor int, candidates []majorCandidates) Resolution {
+	latestMajor := latestPublishedMajorFromCandidates(candidates)
+	if latestMajor <= currentMajor {
+		return Resolution{LatestMajor: latestMajor, Reason: "already on latest stable major"}
+	}
+	blocked := false
+	for _, candidate := range candidates {
+		if candidate.Major <= currentMajor {
+			continue
+		}
+		if candidate.HasMoving {
+			if candidate.MovingEligible {
+				return Resolution{TargetRef: candidate.Moving.Original, HasUpgrade: true, Reason: "moving major tag", LatestMajor: candidate.Major}
+			}
+			blocked = true
+		}
+		if candidate.HasExact {
+			if candidate.ExactEligible {
+				return Resolution{TargetRef: candidate.Exact.Original, HasUpgrade: true, Reason: "exact tag fallback", LatestMajor: candidate.Major}
+			}
+			blocked = true
+		}
+	}
+	reason := "already on latest stable major"
+	if latestMajor > currentMajor || blocked {
+		reason = "newer major tags are still within cooldown"
+	}
+	return Resolution{LatestMajor: latestMajor, Reason: reason}
+}
+
+func resolveLatestStablePolicyModel(current actionspec.StableVersion, candidates []majorCandidates) Resolution {
+	latestMajor := latestPublishedMajorFromCandidates(candidates)
+	blockedNewer := false
+	currentExact, hasCurrentExact, currentExactEligible := actionspec.StableVersion{}, false, false
+	for _, candidate := range candidates {
+		if candidate.Major == current.Major && candidate.HasExact {
+			currentExact = candidate.Exact
+			hasCurrentExact = true
+			currentExactEligible = candidate.ExactEligible
+		}
+		if candidate.Major <= current.Major {
+			continue
+		}
+		if candidate.HasMoving {
+			if candidate.MovingEligible {
+				return Resolution{TargetRef: candidate.Moving.Original, HasUpgrade: true, Reason: "moving major tag", LatestMajor: candidate.Major}
+			}
+			blockedNewer = true
+		}
+		if candidate.HasExact {
+			if candidate.ExactEligible {
+				return Resolution{TargetRef: candidate.Exact.Original, HasUpgrade: true, Reason: "exact tag fallback", LatestMajor: candidate.Major}
+			}
+			blockedNewer = true
+		}
+	}
+	if hasCurrentExact && isSameMajorExactUpgradeModel(current, currentExact) {
+		if currentExactEligible {
+			return Resolution{TargetRef: currentExact.Original, HasUpgrade: true, Reason: "newer stable version in current major", LatestMajor: latestMajor}
+		}
+		return Resolution{LatestMajor: latestMajor, Reason: "newer stable tags in current major are still within cooldown"}
+	}
+	if blockedNewer {
+		return Resolution{LatestMajor: latestMajor, Reason: "newer major tags are still within cooldown"}
+	}
+	return Resolution{LatestMajor: latestMajor, Reason: "already on latest stable version"}
+}
+
+func isSameMajorExactUpgradeModel(current, candidate actionspec.StableVersion) bool {
+	if current.Major != candidate.Major {
+		return false
+	}
+	if isMovingMajor(current) || isMovingMajor(candidate) {
+		return false
+	}
+	if current.Minor != candidate.Minor {
+		return current.Minor < candidate.Minor
+	}
+	if current.Patch != candidate.Patch {
+		return current.Patch < candidate.Patch
+	}
+	return false
 }
 
 type githubTestData struct {

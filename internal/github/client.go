@@ -31,6 +31,16 @@ type Resolution struct {
 	LatestMajor int
 }
 
+type majorCandidates struct {
+	Major          int
+	Moving         actionspec.StableVersion
+	HasMoving      bool
+	MovingEligible bool
+	Exact          actionspec.StableVersion
+	HasExact       bool
+	ExactEligible  bool
+}
+
 type tagResponse struct {
 	Name string `json:"name"`
 }
@@ -83,59 +93,15 @@ func (c *Client) ResolveLatestMajor(ctx context.Context, repo string, currentMaj
 		return Resolution{}, fmt.Errorf("%s: no stable semver tags found", repo)
 	}
 
-	latestMajor := latestPublishedMajor(tags)
-	if latestMajor <= currentMajor {
-		return Resolution{
-			HasUpgrade:  false,
-			LatestMajor: latestMajor,
-			Reason:      "already on latest stable major",
-		}, nil
-	}
-
 	cutoff := time.Time{}
 	if cooldown > 0 {
 		cutoff = c.now().Add(-cooldown)
 	}
-
-	for _, major := range newerMajors(tags, currentMajor) {
-		if moving, ok := findMovingMajor(tags, major); ok {
-			eligible, err := c.tagEligible(ctx, repo, moving.Original, cutoff)
-			if err != nil {
-				return Resolution{}, err
-			}
-			if eligible {
-				return Resolution{
-					TargetRef:   moving.Original,
-					HasUpgrade:  true,
-					Reason:      "moving major tag",
-					LatestMajor: major,
-				}, nil
-			}
-		}
-
-		best, ok := findHighestExactForMajor(tags, major)
-		if !ok {
-			return Resolution{}, fmt.Errorf("%s: no stable tag found for major v%d", repo, major)
-		}
-		eligible, err := c.tagEligible(ctx, repo, best.Original, cutoff)
-		if err != nil {
-			return Resolution{}, err
-		}
-		if eligible {
-			return Resolution{
-				TargetRef:   best.Original,
-				HasUpgrade:  true,
-				Reason:      "exact tag fallback",
-				LatestMajor: major,
-			}, nil
-		}
+	candidates := collectMajorCandidates(tags)
+	if err := c.populateEligibilityForNewerMajors(ctx, repo, candidates, currentMajor, cutoff); err != nil {
+		return Resolution{}, err
 	}
-
-	return Resolution{
-		HasUpgrade:  false,
-		LatestMajor: latestMajor,
-		Reason:      "newer major tags are still within cooldown",
-	}, nil
+	return resolveLatestMajorPolicy(currentMajor, candidates), nil
 }
 
 func (c *Client) ResolveLatestStable(ctx context.Context, repo string, current actionspec.StableVersion, cooldown time.Duration) (Resolution, error) {
@@ -147,83 +113,18 @@ func (c *Client) ResolveLatestStable(ctx context.Context, repo string, current a
 		return Resolution{}, fmt.Errorf("%s: no stable semver tags found", repo)
 	}
 
-	latestMajor := latestPublishedMajor(tags)
-
 	cutoff := time.Time{}
 	if cooldown > 0 {
 		cutoff = c.now().Add(-cooldown)
 	}
-
-	foundBlockedNewerMajor := false
-	for _, major := range newerMajors(tags, current.Major) {
-		if moving, ok := findMovingMajor(tags, major); ok {
-			eligible, err := c.tagEligible(ctx, repo, moving.Original, cutoff)
-			if err != nil {
-				return Resolution{}, err
-			}
-			if eligible {
-				return Resolution{
-					TargetRef:   moving.Original,
-					HasUpgrade:  true,
-					Reason:      "moving major tag",
-					LatestMajor: major,
-				}, nil
-			}
-			foundBlockedNewerMajor = true
-		}
-
-		best, ok := findHighestExactForMajor(tags, major)
-		if !ok {
-			return Resolution{}, fmt.Errorf("%s: no stable tag found for major v%d", repo, major)
-		}
-		eligible, err := c.tagEligible(ctx, repo, best.Original, cutoff)
-		if err != nil {
-			return Resolution{}, err
-		}
-		if eligible {
-			return Resolution{
-				TargetRef:   best.Original,
-				HasUpgrade:  true,
-				Reason:      "exact tag fallback",
-				LatestMajor: major,
-			}, nil
-		}
-		foundBlockedNewerMajor = true
+	candidates := collectMajorCandidates(tags)
+	if err := c.populateEligibilityForNewerMajors(ctx, repo, candidates, current.Major, cutoff); err != nil {
+		return Resolution{}, err
 	}
-
-	bestCurrentMajor, ok := findHighestForMajor(tags, current.Major)
-	if ok && isSameMajorExactUpgrade(current, bestCurrentMajor) {
-		eligible, err := c.tagEligible(ctx, repo, bestCurrentMajor.Original, cutoff)
-		if err != nil {
-			return Resolution{}, err
-		}
-		if eligible {
-			return Resolution{
-				TargetRef:   bestCurrentMajor.Original,
-				HasUpgrade:  true,
-				Reason:      "newer stable version in current major",
-				LatestMajor: latestMajor,
-			}, nil
-		}
-		return Resolution{
-			HasUpgrade:  false,
-			LatestMajor: latestMajor,
-			Reason:      "newer stable tags in current major are still within cooldown",
-		}, nil
+	if err := c.populateEligibilityForCurrentMajorExact(ctx, repo, candidates, current.Major, cutoff); err != nil {
+		return Resolution{}, err
 	}
-	if foundBlockedNewerMajor {
-		return Resolution{
-			HasUpgrade:  false,
-			LatestMajor: latestMajor,
-			Reason:      "newer major tags are still within cooldown",
-		}, nil
-	}
-
-	return Resolution{
-		HasUpgrade:  false,
-		LatestMajor: latestMajor,
-		Reason:      "already on latest stable version",
-	}, nil
+	return resolveLatestStablePolicy(current, candidates), nil
 }
 
 func (c *Client) stableTags(ctx context.Context, repo string) ([]actionspec.StableVersion, error) {
@@ -428,6 +329,155 @@ func parseGitHubTime(repo, value, field string) (time.Time, error) {
 	return parsed, nil
 }
 
+func (c *Client) populateEligibilityForNewerMajors(ctx context.Context, repo string, candidates []majorCandidates, currentMajor int, cutoff time.Time) error {
+	for i := range candidates {
+		if candidates[i].Major <= currentMajor {
+			continue
+		}
+		if candidates[i].HasMoving {
+			eligible, err := c.tagEligible(ctx, repo, candidates[i].Moving.Original, cutoff)
+			if err != nil {
+				return err
+			}
+			candidates[i].MovingEligible = eligible
+		}
+		if candidates[i].HasExact {
+			eligible, err := c.tagEligible(ctx, repo, candidates[i].Exact.Original, cutoff)
+			if err != nil {
+				return err
+			}
+			candidates[i].ExactEligible = eligible
+		}
+	}
+	return nil
+}
+
+func (c *Client) populateEligibilityForCurrentMajorExact(ctx context.Context, repo string, candidates []majorCandidates, currentMajor int, cutoff time.Time) error {
+	for i := range candidates {
+		if candidates[i].Major != currentMajor || !candidates[i].HasExact {
+			continue
+		}
+		eligible, err := c.tagEligible(ctx, repo, candidates[i].Exact.Original, cutoff)
+		if err != nil {
+			return err
+		}
+		candidates[i].ExactEligible = eligible
+		return nil
+	}
+	return nil
+}
+
+func resolveLatestMajorPolicy(currentMajor int, candidates []majorCandidates) Resolution {
+	latestMajor := latestPublishedMajorFromCandidates(candidates)
+	if latestMajor <= currentMajor {
+		return Resolution{
+			HasUpgrade:  false,
+			LatestMajor: latestMajor,
+			Reason:      "already on latest stable major",
+		}
+	}
+
+	for _, candidate := range candidates {
+		if candidate.Major <= currentMajor {
+			continue
+		}
+		if candidate.HasMoving {
+			if candidate.MovingEligible {
+				return Resolution{
+					TargetRef:   candidate.Moving.Original,
+					HasUpgrade:  true,
+					Reason:      "moving major tag",
+					LatestMajor: candidate.Major,
+				}
+			}
+		}
+		if candidate.HasExact {
+			if candidate.ExactEligible {
+				return Resolution{
+					TargetRef:   candidate.Exact.Original,
+					HasUpgrade:  true,
+					Reason:      "exact tag fallback",
+					LatestMajor: candidate.Major,
+				}
+			}
+		}
+	}
+
+	return Resolution{
+		HasUpgrade:  false,
+		LatestMajor: latestMajor,
+		Reason:      "newer major tags are still within cooldown",
+	}
+}
+
+func resolveLatestStablePolicy(current actionspec.StableVersion, candidates []majorCandidates) Resolution {
+	latestMajor := latestPublishedMajorFromCandidates(candidates)
+	foundBlockedNewerMajor := false
+	var currentMajor majorCandidates
+	hasCurrentMajor := false
+
+	for _, candidate := range candidates {
+		if candidate.Major == current.Major {
+			currentMajor = candidate
+			hasCurrentMajor = true
+		}
+		if candidate.Major <= current.Major {
+			continue
+		}
+		if candidate.HasMoving {
+			if candidate.MovingEligible {
+				return Resolution{
+					TargetRef:   candidate.Moving.Original,
+					HasUpgrade:  true,
+					Reason:      "moving major tag",
+					LatestMajor: candidate.Major,
+				}
+			}
+			foundBlockedNewerMajor = true
+		}
+		if candidate.HasExact {
+			if candidate.ExactEligible {
+				return Resolution{
+					TargetRef:   candidate.Exact.Original,
+					HasUpgrade:  true,
+					Reason:      "exact tag fallback",
+					LatestMajor: candidate.Major,
+				}
+			}
+			foundBlockedNewerMajor = true
+		}
+	}
+
+	if hasCurrentMajor && currentMajor.HasExact && isSameMajorExactUpgrade(current, currentMajor.Exact) {
+		if currentMajor.ExactEligible {
+			return Resolution{
+				TargetRef:   currentMajor.Exact.Original,
+				HasUpgrade:  true,
+				Reason:      "newer stable version in current major",
+				LatestMajor: latestMajor,
+			}
+		}
+		return Resolution{
+			HasUpgrade:  false,
+			LatestMajor: latestMajor,
+			Reason:      "newer stable tags in current major are still within cooldown",
+		}
+	}
+	if foundBlockedNewerMajor {
+		return Resolution{
+			HasUpgrade:  false,
+			LatestMajor: latestMajor,
+			Reason:      "newer major tags are still within cooldown",
+		}
+	}
+
+	return Resolution{
+		HasUpgrade:  false,
+		LatestMajor: latestMajor,
+		Reason:      "already on latest stable version",
+	}
+}
+
 func compareVersionDesc(a, b actionspec.StableVersion) int {
 	if a.Major != b.Major {
 		return b.Major - a.Major
@@ -437,12 +487,6 @@ func compareVersionDesc(a, b actionspec.StableVersion) int {
 	}
 	if a.Patch != b.Patch {
 		return b.Patch - a.Patch
-	}
-	if isMovingMajor(a) != isMovingMajor(b) {
-		if isMovingMajor(a) {
-			return -1
-		}
-		return 1
 	}
 	if a.HasMinor != b.HasMinor {
 		if a.HasMinor {
@@ -483,15 +527,6 @@ func findHighestForMajor(tags []actionspec.StableVersion, major int) (actionspec
 	return actionspec.StableVersion{}, false
 }
 
-func findHighestExactForMajor(tags []actionspec.StableVersion, major int) (actionspec.StableVersion, bool) {
-	for _, tag := range tags {
-		if tag.Major == major && !isMovingMajor(tag) {
-			return tag, true
-		}
-	}
-	return actionspec.StableVersion{}, false
-}
-
 func isMovingMajor(tag actionspec.StableVersion) bool {
 	return !tag.HasMinor && !tag.HasPatch
 }
@@ -506,6 +541,35 @@ func isSameMajorExactUpgrade(current, candidate actionspec.StableVersion) bool {
 	return compareVersionDesc(current, candidate) > 0
 }
 
-func latestPublishedMajor(tags []actionspec.StableVersion) int {
-	return tags[0].Major
+func collectMajorCandidates(tags []actionspec.StableVersion) []majorCandidates {
+	byMajor := make([]majorCandidates, 0)
+	indexByMajor := map[int]int{}
+	for _, tag := range tags {
+		index, ok := indexByMajor[tag.Major]
+		if !ok {
+			index = len(byMajor)
+			indexByMajor[tag.Major] = index
+			byMajor = append(byMajor, majorCandidates{Major: tag.Major})
+		}
+		candidate := &byMajor[index]
+		if isMovingMajor(tag) {
+			if !candidate.HasMoving {
+				candidate.Moving = tag
+				candidate.HasMoving = true
+			}
+			continue
+		}
+		if !candidate.HasExact {
+			candidate.Exact = tag
+			candidate.HasExact = true
+		}
+	}
+	return byMajor
+}
+
+func latestPublishedMajorFromCandidates(candidates []majorCandidates) int {
+	if len(candidates) == 0 {
+		return 0
+	}
+	return candidates[0].Major
 }
