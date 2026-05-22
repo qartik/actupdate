@@ -141,6 +141,25 @@ func TestResolveLatestStableTreatsEquivalentExactTagsAsUnchanged(t *testing.T) {
 	}
 }
 
+func TestResolveLatestStableTreatsEquivalentExactTagsAsUnchangedForShorterCurrentRef(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"name":"v3.0.0"},{"name":"v3.0"},{"name":"v2.9"}]`)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client(), server.URL, "")
+	result, err := client.ResolveLatestStable(context.Background(), "pypa/cibuildwheel", mustParseStableVersion(t, "v3.0"), 0)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if result.HasUpgrade {
+		t.Fatalf("expected no upgrade, got %+v", result)
+	}
+	if result.TargetRef != "" {
+		t.Fatalf("expected no target ref, got %q", result.TargetRef)
+	}
+}
+
 func TestResolveLatestMajorIgnoresPrerelease(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `[{"name":"v6.0.0-rc1"},{"name":"v5"},{"name":"v4"}]`)
@@ -695,13 +714,7 @@ func isSameMajorExactUpgradeModel(current, candidate actionspec.StableVersion) b
 	if isMovingRef(current) || isMovingRef(candidate) {
 		return false
 	}
-	if current.Minor != candidate.Minor {
-		return current.Minor < candidate.Minor
-	}
-	if current.Patch != candidate.Patch {
-		return current.Patch < candidate.Patch
-	}
-	return false
+	return compareNumericVersion(current, candidate) < 0
 }
 
 func isSameMajorMovingUpgradeModel(current, candidate actionspec.StableVersion) bool {
@@ -751,7 +764,7 @@ func assertResolutionInvariants(resolution Resolution, candidates []majorCandida
 	if target.Major == current.Major && isMovingRef(current) && isMovingRef(target) && compareVersionDesc(current, target) <= 0 {
 		return fmt.Errorf("same-major moving upgrade is not newer: current=%s target=%s", current.Original, target.Original)
 	}
-	if target.Major == current.Major && !isMovingRef(current) && !isMovingRef(target) && compareVersionDesc(current, target) <= 0 {
+	if target.Major == current.Major && !isMovingRef(current) && !isMovingRef(target) && compareNumericVersion(current, target) >= 0 {
 		return fmt.Errorf("same-major exact upgrade is not newer: current=%s target=%s", current.Original, target.Original)
 	}
 	return nil

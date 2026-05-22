@@ -589,7 +589,7 @@ func isSameMajorExactUpgrade(current, candidate actionspec.StableVersion) bool {
 	if isMovingRef(current) || isMovingRef(candidate) {
 		return false
 	}
-	return compareVersionDesc(current, candidate) > 0
+	return compareNumericVersion(current, candidate) < 0
 }
 
 func isSameMajorMovingUpgrade(current, candidate actionspec.StableVersion) bool {
@@ -600,6 +600,28 @@ func isSameMajorMovingUpgrade(current, candidate actionspec.StableVersion) bool 
 		return false
 	}
 	return compareVersionDesc(current, candidate) > 0
+}
+
+func compareNumericVersion(a, b actionspec.StableVersion) int {
+	if a.Major != b.Major {
+		if a.Major < b.Major {
+			return -1
+		}
+		return 1
+	}
+	if a.Minor != b.Minor {
+		if a.Minor < b.Minor {
+			return -1
+		}
+		return 1
+	}
+	if a.Patch != b.Patch {
+		if a.Patch < b.Patch {
+			return -1
+		}
+		return 1
+	}
+	return 0
 }
 
 func collectMajorCandidates(tags []actionspec.StableVersion) []majorCandidates {
