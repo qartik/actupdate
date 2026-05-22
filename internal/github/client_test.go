@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
+	"testing/quick"
 	"time"
 
 	"actupdate/internal/actionspec"
@@ -312,6 +315,49 @@ func TestResolvePoliciesMatchReferenceModel(t *testing.T) {
 	}
 }
 
+func TestResolveLatestMajorPolicyQuick(t *testing.T) {
+	config := &quick.Config{MaxCount: 1000}
+	property := func(s policyScenario) bool {
+		candidates := s.candidates()
+		got := resolveLatestMajorPolicy(int(s.CurrentMajor), candidates)
+		want := resolveLatestMajorPolicyModel(int(s.CurrentMajor), candidates)
+		if got != want {
+			t.Logf("major policy mismatch scenario=%+v got=%+v want=%+v", s, got, want)
+			return false
+		}
+		if err := assertResolutionInvariants(got, candidates, s.currentVersion()); err != nil {
+			t.Logf("major invariant failed scenario=%+v resolution=%+v err=%v", s, got, err)
+			return false
+		}
+		return true
+	}
+	if err := quick.Check(property, config); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResolveLatestStablePolicyQuick(t *testing.T) {
+	config := &quick.Config{MaxCount: 1000}
+	property := func(s policyScenario) bool {
+		candidates := s.candidates()
+		current := s.currentVersion()
+		got := resolveLatestStablePolicy(current, candidates)
+		want := resolveLatestStablePolicyModel(current, candidates)
+		if got != want {
+			t.Logf("stable policy mismatch scenario=%+v got=%+v want=%+v", s, got, want)
+			return false
+		}
+		if err := assertResolutionInvariants(got, candidates, current); err != nil {
+			t.Logf("stable invariant failed scenario=%+v resolution=%+v err=%v", s, got, err)
+			return false
+		}
+		return true
+	}
+	if err := quick.Check(property, config); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestResolveLatestMajorWithCooldownSkipsTooNewMajor(t *testing.T) {
 	now := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
 	server := newGitHubTestServer(t, githubTestData{
@@ -561,13 +607,13 @@ func resolveLatestMajorPolicyModel(currentMajor int, candidates []majorCandidate
 		}
 		if candidate.HasMoving {
 			if candidate.MovingEligible {
-				return Resolution{TargetRef: candidate.Moving.Original, HasUpgrade: true, Reason: "moving major tag", LatestMajor: candidate.Major}
+				return Resolution{TargetRef: candidate.Moving.Original, HasUpgrade: true, Reason: "moving major tag", LatestMajor: latestMajor}
 			}
 			blocked = true
 		}
 		if candidate.HasExact {
 			if candidate.ExactEligible {
-				return Resolution{TargetRef: candidate.Exact.Original, HasUpgrade: true, Reason: "exact tag fallback", LatestMajor: candidate.Major}
+				return Resolution{TargetRef: candidate.Exact.Original, HasUpgrade: true, Reason: "exact tag fallback", LatestMajor: latestMajor}
 			}
 			blocked = true
 		}
@@ -594,13 +640,13 @@ func resolveLatestStablePolicyModel(current actionspec.StableVersion, candidates
 		}
 		if candidate.HasMoving {
 			if candidate.MovingEligible {
-				return Resolution{TargetRef: candidate.Moving.Original, HasUpgrade: true, Reason: "moving major tag", LatestMajor: candidate.Major}
+				return Resolution{TargetRef: candidate.Moving.Original, HasUpgrade: true, Reason: "moving major tag", LatestMajor: latestMajor}
 			}
 			blockedNewer = true
 		}
 		if candidate.HasExact {
 			if candidate.ExactEligible {
-				return Resolution{TargetRef: candidate.Exact.Original, HasUpgrade: true, Reason: "exact tag fallback", LatestMajor: candidate.Major}
+				return Resolution{TargetRef: candidate.Exact.Original, HasUpgrade: true, Reason: "exact tag fallback", LatestMajor: latestMajor}
 			}
 			blockedNewer = true
 		}
@@ -633,6 +679,46 @@ func isSameMajorExactUpgradeModel(current, candidate actionspec.StableVersion) b
 	return false
 }
 
+func assertResolutionInvariants(resolution Resolution, candidates []majorCandidates, current actionspec.StableVersion) error {
+	latestMajor := latestPublishedMajorFromCandidates(candidates)
+	if resolution.LatestMajor != latestMajor {
+		return fmt.Errorf("latest major mismatch: got %d want %d", resolution.LatestMajor, latestMajor)
+	}
+	if resolution.HasUpgrade != (resolution.TargetRef != "") {
+		return fmt.Errorf("HasUpgrade/TargetRef mismatch: %+v", resolution)
+	}
+	if !resolution.HasUpgrade {
+		return nil
+	}
+
+	target, err := actionspec.ParseStableVersion(resolution.TargetRef)
+	if err != nil {
+		return fmt.Errorf("target ref is not stable semver: %w", err)
+	}
+	if !candidateContainsEligibleRef(candidates, resolution.TargetRef) {
+		return fmt.Errorf("target ref %q is not an eligible published candidate", resolution.TargetRef)
+	}
+	if target.Major < current.Major {
+		return fmt.Errorf("resolver downgraded major from %d to %d", current.Major, target.Major)
+	}
+	if target.Major == current.Major && !isMovingMajor(current) && !isMovingMajor(target) && compareVersionDesc(current, target) <= 0 {
+		return fmt.Errorf("same-major exact upgrade is not newer: current=%s target=%s", current.Original, target.Original)
+	}
+	return nil
+}
+
+func candidateContainsEligibleRef(candidates []majorCandidates, ref string) bool {
+	for _, candidate := range candidates {
+		if candidate.HasMoving && candidate.MovingEligible && candidate.Moving.Original == ref {
+			return true
+		}
+		if candidate.HasExact && candidate.ExactEligible && candidate.Exact.Original == ref {
+			return true
+		}
+	}
+	return false
+}
+
 type githubTestData struct {
 	tags        []string
 	refs        map[string]gitRef
@@ -640,6 +726,36 @@ type githubTestData struct {
 	commits     map[string]string
 	hits        map[string]int
 	escapedHits map[string]int
+}
+
+type policyScenario struct {
+	CurrentMajor uint8
+	CurrentKind  bool
+	CurrentState uint8
+	NewerState   uint8
+	NewestState  uint8
+}
+
+func (policyScenario) Generate(r *rand.Rand, _ int) reflect.Value {
+	scenario := policyScenario{
+		CurrentMajor: uint8(r.Intn(4) + 1),
+		CurrentKind:  r.Intn(2) == 1,
+		CurrentState: uint8(r.Intn(9)),
+		NewerState:   uint8(r.Intn(9)),
+		NewestState:  uint8(r.Intn(9)),
+	}
+	return reflect.ValueOf(scenario)
+}
+
+func (s policyScenario) candidates() []majorCandidates {
+	return makePolicyCandidates(int(s.CurrentMajor), int(s.CurrentState), int(s.NewerState), int(s.NewestState))
+}
+
+func (s policyScenario) currentVersion() actionspec.StableVersion {
+	if s.CurrentKind {
+		return mustParseStableVersion(nil, fmt.Sprintf("v%d.1.0", s.CurrentMajor))
+	}
+	return mustParseStableVersion(nil, fmt.Sprintf("v%d", s.CurrentMajor))
 }
 
 type gitRef struct {

@@ -387,7 +387,7 @@ func resolveLatestMajorPolicy(currentMajor int, candidates []majorCandidates) Re
 					TargetRef:   candidate.Moving.Original,
 					HasUpgrade:  true,
 					Reason:      "moving major tag",
-					LatestMajor: candidate.Major,
+					LatestMajor: latestMajor,
 				}
 			}
 		}
@@ -397,7 +397,7 @@ func resolveLatestMajorPolicy(currentMajor int, candidates []majorCandidates) Re
 					TargetRef:   candidate.Exact.Original,
 					HasUpgrade:  true,
 					Reason:      "exact tag fallback",
-					LatestMajor: candidate.Major,
+					LatestMajor: latestMajor,
 				}
 			}
 		}
@@ -430,7 +430,7 @@ func resolveLatestStablePolicy(current actionspec.StableVersion, candidates []ma
 					TargetRef:   candidate.Moving.Original,
 					HasUpgrade:  true,
 					Reason:      "moving major tag",
-					LatestMajor: candidate.Major,
+					LatestMajor: latestMajor,
 				}
 			}
 			foundBlockedNewerMajor = true
@@ -441,7 +441,7 @@ func resolveLatestStablePolicy(current actionspec.StableVersion, candidates []ma
 					TargetRef:   candidate.Exact.Original,
 					HasUpgrade:  true,
 					Reason:      "exact tag fallback",
-					LatestMajor: candidate.Major,
+					LatestMajor: latestMajor,
 				}
 			}
 			foundBlockedNewerMajor = true
