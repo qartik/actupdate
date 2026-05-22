@@ -101,7 +101,7 @@ func (c *Client) ResolveLatestMajor(ctx context.Context, repo string, currentMaj
 		cutoff = c.now().Add(-cooldown)
 	}
 	candidates := collectMajorCandidates(tags)
-	if err := c.populateEligibilityForNewerMajors(ctx, repo, candidates, currentMajor, cutoff); err != nil {
+	if _, err := c.populateEligibilityForNewerMajors(ctx, repo, candidates, currentMajor, cutoff); err != nil {
 		return Resolution{}, err
 	}
 	return resolveLatestMajorPolicy(currentMajor, candidates), nil
@@ -121,11 +121,14 @@ func (c *Client) ResolveLatestStable(ctx context.Context, repo string, current a
 		cutoff = c.now().Add(-cooldown)
 	}
 	candidates := collectMajorCandidates(tags)
-	if err := c.populateEligibilityForNewerMajors(ctx, repo, candidates, current.Major, cutoff); err != nil {
+	foundNewerEligible, err := c.populateEligibilityForNewerMajors(ctx, repo, candidates, current.Major, cutoff)
+	if err != nil {
 		return Resolution{}, err
 	}
-	if err := c.populateEligibilityForCurrentMajorUpgrades(ctx, repo, candidates, current, cutoff); err != nil {
-		return Resolution{}, err
+	if !foundNewerEligible {
+		if err := c.populateEligibilityForCurrentMajorUpgrades(ctx, repo, candidates, current, cutoff); err != nil {
+			return Resolution{}, err
+		}
 	}
 	return resolveLatestStablePolicy(current, candidates), nil
 }
@@ -332,7 +335,7 @@ func parseGitHubTime(repo, value, field string) (time.Time, error) {
 	return parsed, nil
 }
 
-func (c *Client) populateEligibilityForNewerMajors(ctx context.Context, repo string, candidates []majorCandidates, currentMajor int, cutoff time.Time) error {
+func (c *Client) populateEligibilityForNewerMajors(ctx context.Context, repo string, candidates []majorCandidates, currentMajor int, cutoff time.Time) (bool, error) {
 	for i := range candidates {
 		if candidates[i].Major <= currentMajor {
 			continue
@@ -340,26 +343,35 @@ func (c *Client) populateEligibilityForNewerMajors(ctx context.Context, repo str
 		if candidates[i].HasMovingMajor {
 			eligible, err := c.tagEligible(ctx, repo, candidates[i].MovingMajor.Original, cutoff)
 			if err != nil {
-				return err
+				return false, err
 			}
 			candidates[i].MovingMajorEligible = eligible
+			if eligible {
+				return true, nil
+			}
 		}
 		if candidates[i].HasMovingMinor {
 			eligible, err := c.tagEligible(ctx, repo, candidates[i].MovingMinor.Original, cutoff)
 			if err != nil {
-				return err
+				return false, err
 			}
 			candidates[i].MovingMinorEligible = eligible
+			if eligible && !candidates[i].HasMovingMajor {
+				return true, nil
+			}
 		}
 		if candidates[i].HasExact {
 			eligible, err := c.tagEligible(ctx, repo, candidates[i].Exact.Original, cutoff)
 			if err != nil {
-				return err
+				return false, err
 			}
 			candidates[i].ExactEligible = eligible
+			if eligible {
+				return true, nil
+			}
 		}
 	}
-	return nil
+	return false, nil
 }
 
 func (c *Client) populateEligibilityForCurrentMajorUpgrades(ctx context.Context, repo string, candidates []majorCandidates, current actionspec.StableVersion, cutoff time.Time) error {

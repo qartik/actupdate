@@ -512,6 +512,39 @@ func TestResolveLatestMajorCachesTagTimestamps(t *testing.T) {
 	}
 }
 
+func TestResolveLatestStableCooldownStopsAfterFirstEligibleNewerMajor(t *testing.T) {
+	now := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
+	hits := map[string]int{}
+	server := newGitHubTestServer(t, githubTestData{
+		tags: []string{"v7", "v7.1.0", "v6", "v6.2.1", "v4"},
+		refs: map[string]gitRef{
+			"v7": {Type: "tag", SHA: "tag-v7"},
+		},
+		tagObjects: map[string]string{
+			"tag-v7": now.Add(-10 * 24 * time.Hour).Format(time.RFC3339),
+		},
+		hits: hits,
+	})
+	defer server.Close()
+
+	client := NewClient(server.Client(), server.URL, "")
+	client.now = func() time.Time { return now }
+
+	result, err := client.ResolveLatestStable(context.Background(), "actions/checkout", mustParseStableVersion(t, "v4"), 7*24*time.Hour)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !result.HasUpgrade || result.TargetRef != "v7" || result.Reason != "moving major tag" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if hits["/repos/actions/checkout/git/ref/tags/v6"] != 0 {
+		t.Fatalf("expected no lower-major moving lookup, got %d", hits["/repos/actions/checkout/git/ref/tags/v6"])
+	}
+	if hits["/repos/actions/checkout/git/ref/tags/v6.2.1"] != 0 {
+		t.Fatalf("expected no lower-major exact lookup, got %d", hits["/repos/actions/checkout/git/ref/tags/v6.2.1"])
+	}
+}
+
 func TestResolveLatestMajorEscapesTagPathSegments(t *testing.T) {
 	now := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
 	hits := map[string]int{}
