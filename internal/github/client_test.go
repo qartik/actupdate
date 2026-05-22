@@ -201,6 +201,33 @@ func TestResolveLatestMajorWithCooldownFallsBackToOlderExactTag(t *testing.T) {
 	}
 }
 
+func TestResolveLatestMajorWithCooldownFallsBackToExactTagWhenMovingTagBlocked(t *testing.T) {
+	now := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
+	server := newGitHubTestServer(t, githubTestData{
+		tags: []string{"v6", "v6.0.0", "v4"},
+		refs: map[string]gitRef{
+			"v6":     {Type: "tag", SHA: "tag-v6"},
+			"v6.0.0": {Type: "tag", SHA: "tag-v600"},
+		},
+		tagObjects: map[string]string{
+			"tag-v6":   now.Add(-2 * 24 * time.Hour).Format(time.RFC3339),
+			"tag-v600": now.Add(-9 * 24 * time.Hour).Format(time.RFC3339),
+		},
+	})
+	defer server.Close()
+
+	client := NewClient(server.Client(), server.URL, "")
+	client.now = func() time.Time { return now }
+
+	result, err := client.ResolveLatestMajor(context.Background(), "actions/checkout", 4, 7*24*time.Hour)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !result.HasUpgrade || result.TargetRef != "v6.0.0" || result.Reason != "exact tag fallback" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
 func TestResolveLatestMajorWithCooldownSkipsTooNewMajor(t *testing.T) {
 	now := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
 	server := newGitHubTestServer(t, githubTestData{

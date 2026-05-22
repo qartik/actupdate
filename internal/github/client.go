@@ -113,7 +113,7 @@ func (c *Client) ResolveLatestMajor(ctx context.Context, repo string, currentMaj
 			}
 		}
 
-		best, ok := findHighestForMajor(tags, major)
+		best, ok := findHighestExactForMajor(tags, major)
 		if !ok {
 			return Resolution{}, fmt.Errorf("%s: no stable tag found for major v%d", repo, major)
 		}
@@ -172,7 +172,7 @@ func (c *Client) ResolveLatestStable(ctx context.Context, repo string, current a
 			foundBlockedNewerMajor = true
 		}
 
-		best, ok := findHighestForMajor(tags, major)
+		best, ok := findHighestExactForMajor(tags, major)
 		if !ok {
 			return Resolution{}, fmt.Errorf("%s: no stable tag found for major v%d", repo, major)
 		}
@@ -477,6 +477,15 @@ func findMovingMajor(tags []actionspec.StableVersion, major int) (actionspec.Sta
 func findHighestForMajor(tags []actionspec.StableVersion, major int) (actionspec.StableVersion, bool) {
 	for _, tag := range tags {
 		if tag.Major == major {
+			return tag, true
+		}
+	}
+	return actionspec.StableVersion{}, false
+}
+
+func findHighestExactForMajor(tags []actionspec.StableVersion, major int) (actionspec.StableVersion, bool) {
+	for _, tag := range tags {
+		if tag.Major == major && !isMovingMajor(tag) {
 			return tag, true
 		}
 	}
