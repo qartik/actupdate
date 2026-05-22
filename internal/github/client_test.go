@@ -60,7 +60,7 @@ func TestResolveLatestStableUpdatesWithinCurrentMajor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if !result.HasUpgrade || result.TargetRef != "v3.3" || result.Reason != "newer stable version in current major" {
+	if !result.HasUpgrade || result.TargetRef != "v3.3" || result.Reason != "newer moving version in current major" {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 }
@@ -73,6 +73,25 @@ func TestResolveLatestStableLeavesCurrentMajorMovingTagUnchanged(t *testing.T) {
 
 	client := NewClient(server.Client(), server.URL, "")
 	result, err := client.ResolveLatestStable(context.Background(), "pypa/cibuildwheel", mustParseStableVersion(t, "v3"), 0)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if result.HasUpgrade {
+		t.Fatalf("expected no upgrade, got %+v", result)
+	}
+	if result.Reason != "already on latest stable version" {
+		t.Fatalf("unexpected reason: %q", result.Reason)
+	}
+}
+
+func TestResolveLatestStableLeavesCurrentMinorMovingTagUnchanged(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"name":"v3.4.1"},{"name":"v3.4"},{"name":"v3.3.9"}]`)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client(), server.URL, "")
+	result, err := client.ResolveLatestStable(context.Background(), "pypa/cibuildwheel", mustParseStableVersion(t, "v3.4"), 0)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -545,12 +564,12 @@ func candidateFromState(major, state int) (majorCandidates, bool) {
 	case 0:
 		return majorCandidates{}, false
 	case 1:
-		candidate.Moving = mustParseStableVersion(nil, fmt.Sprintf("v%d", major))
-		candidate.HasMoving = true
-		candidate.MovingEligible = true
+		candidate.MovingMajor = mustParseStableVersion(nil, fmt.Sprintf("v%d", major))
+		candidate.HasMovingMajor = true
+		candidate.MovingMajorEligible = true
 	case 2:
-		candidate.Moving = mustParseStableVersion(nil, fmt.Sprintf("v%d", major))
-		candidate.HasMoving = true
+		candidate.MovingMajor = mustParseStableVersion(nil, fmt.Sprintf("v%d", major))
+		candidate.HasMovingMajor = true
 	case 3:
 		candidate.Exact = mustParseStableVersion(nil, fmt.Sprintf("v%d.2.0", major))
 		candidate.HasExact = true
@@ -559,27 +578,27 @@ func candidateFromState(major, state int) (majorCandidates, bool) {
 		candidate.Exact = mustParseStableVersion(nil, fmt.Sprintf("v%d.2.0", major))
 		candidate.HasExact = true
 	case 5:
-		candidate.Moving = mustParseStableVersion(nil, fmt.Sprintf("v%d", major))
-		candidate.HasMoving = true
-		candidate.MovingEligible = true
+		candidate.MovingMajor = mustParseStableVersion(nil, fmt.Sprintf("v%d", major))
+		candidate.HasMovingMajor = true
+		candidate.MovingMajorEligible = true
 		candidate.Exact = mustParseStableVersion(nil, fmt.Sprintf("v%d.2.0", major))
 		candidate.HasExact = true
 		candidate.ExactEligible = true
 	case 6:
-		candidate.Moving = mustParseStableVersion(nil, fmt.Sprintf("v%d", major))
-		candidate.HasMoving = true
+		candidate.MovingMajor = mustParseStableVersion(nil, fmt.Sprintf("v%d", major))
+		candidate.HasMovingMajor = true
 		candidate.Exact = mustParseStableVersion(nil, fmt.Sprintf("v%d.2.0", major))
 		candidate.HasExact = true
 		candidate.ExactEligible = true
 	case 7:
-		candidate.Moving = mustParseStableVersion(nil, fmt.Sprintf("v%d", major))
-		candidate.HasMoving = true
+		candidate.MovingMajor = mustParseStableVersion(nil, fmt.Sprintf("v%d", major))
+		candidate.HasMovingMajor = true
 		candidate.Exact = mustParseStableVersion(nil, fmt.Sprintf("v%d.2.0", major))
 		candidate.HasExact = true
 	case 8:
-		candidate.Moving = mustParseStableVersion(nil, fmt.Sprintf("v%d", major))
-		candidate.HasMoving = true
-		candidate.MovingEligible = true
+		candidate.MovingMajor = mustParseStableVersion(nil, fmt.Sprintf("v%d", major))
+		candidate.HasMovingMajor = true
+		candidate.MovingMajorEligible = true
 		candidate.Exact = mustParseStableVersion(nil, fmt.Sprintf("v%d.2.0", major))
 		candidate.HasExact = true
 	default:
@@ -605,9 +624,9 @@ func resolveLatestMajorPolicyModel(currentMajor int, candidates []majorCandidate
 		if candidate.Major <= currentMajor {
 			continue
 		}
-		if candidate.HasMoving {
-			if candidate.MovingEligible {
-				return Resolution{TargetRef: candidate.Moving.Original, HasUpgrade: true, Reason: "moving major tag", LatestMajor: latestMajor}
+		if movingRef, eligible, ok := preferredMovingUpgrade(candidate); ok {
+			if eligible {
+				return Resolution{TargetRef: movingRef.Original, HasUpgrade: true, Reason: "moving major tag", LatestMajor: latestMajor}
 			}
 			blocked = true
 		}
@@ -638,9 +657,9 @@ func resolveLatestStablePolicyModel(current actionspec.StableVersion, candidates
 		if candidate.Major <= current.Major {
 			continue
 		}
-		if candidate.HasMoving {
-			if candidate.MovingEligible {
-				return Resolution{TargetRef: candidate.Moving.Original, HasUpgrade: true, Reason: "moving major tag", LatestMajor: latestMajor}
+		if movingRef, eligible, ok := preferredMovingUpgrade(candidate); ok {
+			if eligible {
+				return Resolution{TargetRef: movingRef.Original, HasUpgrade: true, Reason: "moving major tag", LatestMajor: latestMajor}
 			}
 			blockedNewer = true
 		}
@@ -650,6 +669,12 @@ func resolveLatestStablePolicyModel(current actionspec.StableVersion, candidates
 			}
 			blockedNewer = true
 		}
+	}
+	if movingTarget, eligible, ok := samePrecisionMovingCandidate(current, currentMajorCandidateForModel(current.Major, candidates)); ok && isSameMajorMovingUpgradeModel(current, movingTarget) {
+		if eligible {
+			return Resolution{TargetRef: movingTarget.Original, HasUpgrade: true, Reason: "newer moving version in current major", LatestMajor: latestMajor}
+		}
+		return Resolution{LatestMajor: latestMajor, Reason: "newer moving tags in current major are still within cooldown"}
 	}
 	if hasCurrentExact && isSameMajorExactUpgradeModel(current, currentExact) {
 		if currentExactEligible {
@@ -667,7 +692,7 @@ func isSameMajorExactUpgradeModel(current, candidate actionspec.StableVersion) b
 	if current.Major != candidate.Major {
 		return false
 	}
-	if isMovingMajor(current) || isMovingMajor(candidate) {
+	if isMovingRef(current) || isMovingRef(candidate) {
 		return false
 	}
 	if current.Minor != candidate.Minor {
@@ -677,6 +702,28 @@ func isSameMajorExactUpgradeModel(current, candidate actionspec.StableVersion) b
 		return current.Patch < candidate.Patch
 	}
 	return false
+}
+
+func isSameMajorMovingUpgradeModel(current, candidate actionspec.StableVersion) bool {
+	if current.Major != candidate.Major {
+		return false
+	}
+	if !isMovingRef(current) || !isMovingRef(candidate) {
+		return false
+	}
+	if current.Minor != candidate.Minor {
+		return current.Minor < candidate.Minor
+	}
+	return false
+}
+
+func currentMajorCandidateForModel(major int, candidates []majorCandidates) majorCandidates {
+	for _, candidate := range candidates {
+		if candidate.Major == major {
+			return candidate
+		}
+	}
+	return majorCandidates{Major: major}
 }
 
 func assertResolutionInvariants(resolution Resolution, candidates []majorCandidates, current actionspec.StableVersion) error {
@@ -701,7 +748,10 @@ func assertResolutionInvariants(resolution Resolution, candidates []majorCandida
 	if target.Major < current.Major {
 		return fmt.Errorf("resolver downgraded major from %d to %d", current.Major, target.Major)
 	}
-	if target.Major == current.Major && !isMovingMajor(current) && !isMovingMajor(target) && compareVersionDesc(current, target) <= 0 {
+	if target.Major == current.Major && isMovingRef(current) && isMovingRef(target) && compareVersionDesc(current, target) <= 0 {
+		return fmt.Errorf("same-major moving upgrade is not newer: current=%s target=%s", current.Original, target.Original)
+	}
+	if target.Major == current.Major && !isMovingRef(current) && !isMovingRef(target) && compareVersionDesc(current, target) <= 0 {
 		return fmt.Errorf("same-major exact upgrade is not newer: current=%s target=%s", current.Original, target.Original)
 	}
 	return nil
@@ -709,7 +759,10 @@ func assertResolutionInvariants(resolution Resolution, candidates []majorCandida
 
 func candidateContainsEligibleRef(candidates []majorCandidates, ref string) bool {
 	for _, candidate := range candidates {
-		if candidate.HasMoving && candidate.MovingEligible && candidate.Moving.Original == ref {
+		if candidate.HasMovingMajor && candidate.MovingMajorEligible && candidate.MovingMajor.Original == ref {
+			return true
+		}
+		if candidate.HasMovingMinor && candidate.MovingMinorEligible && candidate.MovingMinor.Original == ref {
 			return true
 		}
 		if candidate.HasExact && candidate.ExactEligible && candidate.Exact.Original == ref {

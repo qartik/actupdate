@@ -32,13 +32,16 @@ type Resolution struct {
 }
 
 type majorCandidates struct {
-	Major          int
-	Moving         actionspec.StableVersion
-	HasMoving      bool
-	MovingEligible bool
-	Exact          actionspec.StableVersion
-	HasExact       bool
-	ExactEligible  bool
+	Major               int
+	MovingMajor         actionspec.StableVersion
+	HasMovingMajor      bool
+	MovingMajorEligible bool
+	MovingMinor         actionspec.StableVersion
+	HasMovingMinor      bool
+	MovingMinorEligible bool
+	Exact               actionspec.StableVersion
+	HasExact            bool
+	ExactEligible       bool
 }
 
 type tagResponse struct {
@@ -121,7 +124,7 @@ func (c *Client) ResolveLatestStable(ctx context.Context, repo string, current a
 	if err := c.populateEligibilityForNewerMajors(ctx, repo, candidates, current.Major, cutoff); err != nil {
 		return Resolution{}, err
 	}
-	if err := c.populateEligibilityForCurrentMajorExact(ctx, repo, candidates, current.Major, cutoff); err != nil {
+	if err := c.populateEligibilityForCurrentMajorUpgrades(ctx, repo, candidates, current, cutoff); err != nil {
 		return Resolution{}, err
 	}
 	return resolveLatestStablePolicy(current, candidates), nil
@@ -334,12 +337,19 @@ func (c *Client) populateEligibilityForNewerMajors(ctx context.Context, repo str
 		if candidates[i].Major <= currentMajor {
 			continue
 		}
-		if candidates[i].HasMoving {
-			eligible, err := c.tagEligible(ctx, repo, candidates[i].Moving.Original, cutoff)
+		if candidates[i].HasMovingMajor {
+			eligible, err := c.tagEligible(ctx, repo, candidates[i].MovingMajor.Original, cutoff)
 			if err != nil {
 				return err
 			}
-			candidates[i].MovingEligible = eligible
+			candidates[i].MovingMajorEligible = eligible
+		}
+		if candidates[i].HasMovingMinor {
+			eligible, err := c.tagEligible(ctx, repo, candidates[i].MovingMinor.Original, cutoff)
+			if err != nil {
+				return err
+			}
+			candidates[i].MovingMinorEligible = eligible
 		}
 		if candidates[i].HasExact {
 			eligible, err := c.tagEligible(ctx, repo, candidates[i].Exact.Original, cutoff)
@@ -352,16 +362,32 @@ func (c *Client) populateEligibilityForNewerMajors(ctx context.Context, repo str
 	return nil
 }
 
-func (c *Client) populateEligibilityForCurrentMajorExact(ctx context.Context, repo string, candidates []majorCandidates, currentMajor int, cutoff time.Time) error {
+func (c *Client) populateEligibilityForCurrentMajorUpgrades(ctx context.Context, repo string, candidates []majorCandidates, current actionspec.StableVersion, cutoff time.Time) error {
 	for i := range candidates {
-		if candidates[i].Major != currentMajor || !candidates[i].HasExact {
+		if candidates[i].Major != current.Major {
 			continue
 		}
-		eligible, err := c.tagEligible(ctx, repo, candidates[i].Exact.Original, cutoff)
-		if err != nil {
-			return err
+		if isMajorMovingRef(current) && candidates[i].HasMovingMajor && isSameMajorMovingUpgrade(current, candidates[i].MovingMajor) {
+			eligible, err := c.tagEligible(ctx, repo, candidates[i].MovingMajor.Original, cutoff)
+			if err != nil {
+				return err
+			}
+			candidates[i].MovingMajorEligible = eligible
 		}
-		candidates[i].ExactEligible = eligible
+		if isMinorMovingRef(current) && candidates[i].HasMovingMinor && isSameMajorMovingUpgrade(current, candidates[i].MovingMinor) {
+			eligible, err := c.tagEligible(ctx, repo, candidates[i].MovingMinor.Original, cutoff)
+			if err != nil {
+				return err
+			}
+			candidates[i].MovingMinorEligible = eligible
+		}
+		if candidates[i].HasExact && isSameMajorExactUpgrade(current, candidates[i].Exact) {
+			eligible, err := c.tagEligible(ctx, repo, candidates[i].Exact.Original, cutoff)
+			if err != nil {
+				return err
+			}
+			candidates[i].ExactEligible = eligible
+		}
 		return nil
 	}
 	return nil
@@ -381,10 +407,10 @@ func resolveLatestMajorPolicy(currentMajor int, candidates []majorCandidates) Re
 		if candidate.Major <= currentMajor {
 			continue
 		}
-		if candidate.HasMoving {
-			if candidate.MovingEligible {
+		if movingRef, eligible, ok := preferredMovingUpgrade(candidate); ok {
+			if eligible {
 				return Resolution{
-					TargetRef:   candidate.Moving.Original,
+					TargetRef:   movingRef.Original,
 					HasUpgrade:  true,
 					Reason:      "moving major tag",
 					LatestMajor: latestMajor,
@@ -424,10 +450,10 @@ func resolveLatestStablePolicy(current actionspec.StableVersion, candidates []ma
 		if candidate.Major <= current.Major {
 			continue
 		}
-		if candidate.HasMoving {
-			if candidate.MovingEligible {
+		if movingRef, eligible, ok := preferredMovingUpgrade(candidate); ok {
+			if eligible {
 				return Resolution{
-					TargetRef:   candidate.Moving.Original,
+					TargetRef:   movingRef.Original,
 					HasUpgrade:  true,
 					Reason:      "moving major tag",
 					LatestMajor: latestMajor,
@@ -448,6 +474,23 @@ func resolveLatestStablePolicy(current actionspec.StableVersion, candidates []ma
 		}
 	}
 
+	if hasCurrentMajor {
+		if movingTarget, eligible, ok := samePrecisionMovingCandidate(current, currentMajor); ok && isSameMajorMovingUpgrade(current, movingTarget) {
+			if eligible {
+				return Resolution{
+					TargetRef:   movingTarget.Original,
+					HasUpgrade:  true,
+					Reason:      "newer moving version in current major",
+					LatestMajor: latestMajor,
+				}
+			}
+			return Resolution{
+				HasUpgrade:  false,
+				LatestMajor: latestMajor,
+				Reason:      "newer moving tags in current major are still within cooldown",
+			}
+		}
+	}
 	if hasCurrentMajor && currentMajor.HasExact && isSameMajorExactUpgrade(current, currentMajor.Exact) {
 		if currentMajor.ExactEligible {
 			return Resolution{
@@ -511,7 +554,7 @@ func compareVersionDesc(a, b actionspec.StableVersion) int {
 
 func findMovingMajor(tags []actionspec.StableVersion, major int) (actionspec.StableVersion, bool) {
 	for _, tag := range tags {
-		if tag.Major == major && isMovingMajor(tag) {
+		if tag.Major == major && isMajorMovingRef(tag) {
 			return tag, true
 		}
 	}
@@ -527,15 +570,33 @@ func findHighestForMajor(tags []actionspec.StableVersion, major int) (actionspec
 	return actionspec.StableVersion{}, false
 }
 
-func isMovingMajor(tag actionspec.StableVersion) bool {
+func isMovingRef(tag actionspec.StableVersion) bool {
+	return !tag.HasPatch
+}
+
+func isMajorMovingRef(tag actionspec.StableVersion) bool {
 	return !tag.HasMinor && !tag.HasPatch
+}
+
+func isMinorMovingRef(tag actionspec.StableVersion) bool {
+	return tag.HasMinor && !tag.HasPatch
 }
 
 func isSameMajorExactUpgrade(current, candidate actionspec.StableVersion) bool {
 	if current.Major != candidate.Major {
 		return false
 	}
-	if isMovingMajor(current) || isMovingMajor(candidate) {
+	if isMovingRef(current) || isMovingRef(candidate) {
+		return false
+	}
+	return compareVersionDesc(current, candidate) > 0
+}
+
+func isSameMajorMovingUpgrade(current, candidate actionspec.StableVersion) bool {
+	if current.Major != candidate.Major {
+		return false
+	}
+	if !isMovingRef(current) || !isMovingRef(candidate) {
 		return false
 	}
 	return compareVersionDesc(current, candidate) > 0
@@ -552,10 +613,17 @@ func collectMajorCandidates(tags []actionspec.StableVersion) []majorCandidates {
 			byMajor = append(byMajor, majorCandidates{Major: tag.Major})
 		}
 		candidate := &byMajor[index]
-		if isMovingMajor(tag) {
-			if !candidate.HasMoving {
-				candidate.Moving = tag
-				candidate.HasMoving = true
+		if isMajorMovingRef(tag) {
+			if !candidate.HasMovingMajor {
+				candidate.MovingMajor = tag
+				candidate.HasMovingMajor = true
+			}
+			continue
+		}
+		if isMinorMovingRef(tag) {
+			if !candidate.HasMovingMinor {
+				candidate.MovingMinor = tag
+				candidate.HasMovingMinor = true
 			}
 			continue
 		}
@@ -565,6 +633,32 @@ func collectMajorCandidates(tags []actionspec.StableVersion) []majorCandidates {
 		}
 	}
 	return byMajor
+}
+
+func preferredMovingUpgrade(candidate majorCandidates) (actionspec.StableVersion, bool, bool) {
+	if candidate.HasMovingMajor {
+		return candidate.MovingMajor, candidate.MovingMajorEligible, true
+	}
+	if candidate.HasMovingMinor {
+		return candidate.MovingMinor, candidate.MovingMinorEligible, true
+	}
+	return actionspec.StableVersion{}, false, false
+}
+
+func samePrecisionMovingCandidate(current actionspec.StableVersion, candidate majorCandidates) (actionspec.StableVersion, bool, bool) {
+	if isMajorMovingRef(current) {
+		if candidate.HasMovingMajor {
+			return candidate.MovingMajor, candidate.MovingMajorEligible, true
+		}
+		return actionspec.StableVersion{}, false, false
+	}
+	if isMinorMovingRef(current) {
+		if candidate.HasMovingMinor {
+			return candidate.MovingMinor, candidate.MovingMinorEligible, true
+		}
+		return actionspec.StableVersion{}, false, false
+	}
+	return actionspec.StableVersion{}, false, false
 }
 
 func latestPublishedMajorFromCandidates(candidates []majorCandidates) int {
