@@ -46,6 +46,47 @@ func TestRunVersion(t *testing.T) {
 	}
 }
 
+func TestRunHelp(t *testing.T) {
+	cases := [][]string{
+		{"-h"},
+		{"-help"},
+	}
+	for _, args := range cases {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := run(args, strings.NewReader(""), &stdout, &stderr, http.DefaultClient, "")
+			if exitCode != exitOK {
+				t.Fatalf("expected exit 0, got %d stderr=%s", exitCode, stderr.String())
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("expected empty stderr, got %q", stderr.String())
+			}
+			got := stdout.String()
+			for _, want := range []string{"Usage of actupdate:", "Updates GitHub Action references", "actupdate version", "-cooldown-days int", "-repo string"} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("expected help output to contain %q, got %q", want, got)
+				}
+			}
+		})
+	}
+}
+
+func TestRunHelpSubcommandIsRejected(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"help"}, strings.NewReader(""), &stdout, &stderr, http.DefaultClient, "")
+	if exitCode != exitInvalidInput {
+		t.Fatalf("expected exit %d, got %d", exitInvalidInput, exitCode)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("expected empty stdout, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "unexpected positional arguments: help") {
+		t.Fatalf("expected positional argument error, got %q", stderr.String())
+	}
+}
+
 func TestPromptConfirmDefaultsToYes(t *testing.T) {
 	var stdout bytes.Buffer
 	confirmed, err := promptConfirm(strings.NewReader("\n"), &stdout)
@@ -202,6 +243,47 @@ func TestRunCooldownDaysLeavesTooNewMajorUnchanged(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "unchanged: newer major tags are still within cooldown") {
 		t.Fatalf("expected cooldown reason in output, got %q", stdout.String())
+	}
+}
+
+func TestRunUpdatesOlderExactTagEvenWhenSameRepoHasNewerRef(t *testing.T) {
+	repo := t.TempDir()
+	workflowDir := filepath.Join(repo, ".github", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	workflowPath := filepath.Join(workflowDir, "build_wheels.yml")
+	original := "steps:\n  - uses: pypa/cibuildwheel@v3.3\n  - uses: pypa/cibuildwheel@v3.0\n"
+	if err := os.WriteFile(workflowPath, []byte(original), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/pypa/cibuildwheel/tags" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `[{"name":"v3.3"},{"name":"v3.0"},{"name":"v2.9"}]`)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--repo", repo, "--yes"}, strings.NewReader(""), &stdout, &stderr, server.Client(), server.URL)
+	if exitCode != exitOK {
+		t.Fatalf("expected exit 0, got %d stderr=%s", exitCode, stderr.String())
+	}
+
+	updated, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatalf("read workflow: %v", err)
+	}
+	got := string(updated)
+	if strings.Count(got, "pypa/cibuildwheel@v3.3") != 2 {
+		t.Fatalf("expected both refs to end at v3.3, got %q", got)
+	}
+	if !strings.Contains(stdout.String(), "pypa/cibuildwheel@v3.0 -> @v3.3") {
+		t.Fatalf("expected same-major upgrade in output, got %q", stdout.String())
 	}
 }
 

@@ -1,7 +1,7 @@
 # actupdate
 
 `actupdate` updates GitHub Action references in workflow YAML files to the latest
-stable major version.
+eligible stable version.
 
 ## What It Does
 
@@ -10,9 +10,9 @@ Run `actupdate` inside a git repo and it will:
 1. Scan `.github/workflows/*.yml` and `.github/workflows/*.yaml`
 2. Find remote `uses:` references such as `actions/checkout@v4`
 3. Query GitHub for the action repository's tags
-4. Prefer a moving major tag such as `v6` when it exists
+4. Prefer moving tags such as `v6` or `v6.2` when the action publishes them
 5. Fall back to the latest verified stable exact tag such as `v6.2.1` when the
-   repo does not publish moving major tags
+   repo does not publish an eligible moving tag
 6. Show the planned updates with colorized terminal output when supported
 7. Prompt once before rewriting files; pressing Enter accepts the default and
    applies the changes
@@ -76,10 +76,15 @@ Each release asset is named like `actupdate_linux_amd64.tar.gz` and contains the
 
 - Only stable semver tags are considered
 - Pre-release tags such as `-rc`, `-beta`, and `-alpha` are ignored
-- Updates only move to the latest stable major
+- Updates move to the latest eligible stable version
 - `--cooldown-days` can exclude newer tags until they have aged past the
   configured threshold
-- Same-major patch or minor bumps are not applied in v1
+- Moving major tags such as `v6` are preferred first; moving minor tags such as
+  `v6.2` are preferred next; exact tags such as `v6.2.1` are the fallback
+- Moving refs keep their precision within the same major, so `v3` is not
+  rewritten to `v3.4` and `v3.4` is not rewritten to `v3.4.1`
+- Exact refs can upgrade within the same major, but representation-only changes
+  such as `v3.0` to `v3.0.0` are ignored
 - If any candidate update cannot be verified, the tool prints the failures and
   does not rewrite any files
 
