@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,7 +14,7 @@ import (
 )
 
 func TestParseArgsCooldownDays(t *testing.T) {
-	opts, err := parseArgs([]string{"--cooldown-days", "7"})
+	opts, err := parseArgs([]string{"--cooldown-days", "7"}, io.Discard)
 	if err != nil {
 		t.Fatalf("parse args: %v", err)
 	}
@@ -23,14 +24,14 @@ func TestParseArgsCooldownDays(t *testing.T) {
 }
 
 func TestParseArgsRejectsNegativeCooldownDays(t *testing.T) {
-	if _, err := parseArgs([]string{"--cooldown-days", "-1"}); err == nil {
+	if _, err := parseArgs([]string{"--cooldown-days", "-1"}, io.Discard); err == nil {
 		t.Fatal("expected error")
 	}
 }
 
 func TestParseArgsRejectsOverflowingCooldownDays(t *testing.T) {
 	tooLarge := fmt.Sprintf("%d", maxCooldownDays+1)
-	if _, err := parseArgs([]string{"--cooldown-days", tooLarge}); err == nil {
+	if _, err := parseArgs([]string{"--cooldown-days", tooLarge}, io.Discard); err == nil {
 		t.Fatal("expected error")
 	}
 }
@@ -43,6 +44,21 @@ func TestRunVersion(t *testing.T) {
 	}
 	if got := strings.TrimSpace(stdout.String()); got != version {
 		t.Fatalf("unexpected version output: %q", got)
+	}
+}
+
+func TestRunHelpWithOtherFlags(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--help", "--repo", "."}, strings.NewReader(""), &stdout, &stderr, http.DefaultClient, "")
+	if exitCode != exitOK {
+		t.Fatalf("expected exit 0, got %d stderr=%s", exitCode, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected empty stderr, got %q", stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "Usage of actupdate:") {
+		t.Fatalf("expected usage output, got %q", got)
 	}
 }
 

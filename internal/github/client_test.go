@@ -74,6 +74,22 @@ func TestResolveLatestStableTreatsEquivalentExactTagsAsUnchangedForShorterCurren
 	}
 }
 
+func TestResolveLatestStableUpgradesExactRefToSameMajorMovingMinor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"name":"v3.3"},{"name":"v3.0.0"},{"name":"v2.9"}]`)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client(), server.URL, "")
+	result, err := client.ResolveLatestStable(context.Background(), "pypa/cibuildwheel", mustParseStableVersion(t, "v3.0.0"), 0)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !result.HasUpgrade || result.TargetRef != "v3.3" || result.Reason != "newer moving version in current major" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
 func TestResolveLatestMajorIgnoresPrerelease(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `[{"name":"v6.0.0-rc1"},{"name":"v5"},{"name":"v4"}]`)
@@ -684,10 +700,21 @@ func resolveLatestStablePolicyModel(current Version, candidates []majorCandidate
 			return Resolution{LatestMajor: latestMajor, Reason: "newer moving tags in current major are still within cooldown"}
 		}
 	case PrecisionExact:
-		if isSameMajorExactUpgradeModel(current, currentMajor.Exact) {
-			if currentMajor.Exact.Eligibility == EligibilityEligible {
-				return Resolution{TargetRef: currentMajor.Exact.Version.Original, HasUpgrade: true, Reason: "newer stable version in current major", LatestMajor: latestMajor}
+		foundBlocked := false
+		for _, target := range []*Candidate{currentMajor.MovingMajor, currentMajor.MovingMinor, currentMajor.Exact} {
+			if !isSameMajorExactCurrentUpgradeModel(current, target) {
+				continue
 			}
+			if target.Eligibility == EligibilityEligible {
+				reason := "newer moving version in current major"
+				if target.Version.Precision == PrecisionExact {
+					reason = "newer stable version in current major"
+				}
+				return Resolution{TargetRef: target.Version.Original, HasUpgrade: true, Reason: reason, LatestMajor: latestMajor}
+			}
+			foundBlocked = true
+		}
+		if foundBlocked {
 			if blockedNewer {
 				return Resolution{LatestMajor: latestMajor, Reason: "newer major tags are still within cooldown"}
 			}
@@ -700,11 +727,11 @@ func resolveLatestStablePolicyModel(current Version, candidates []majorCandidate
 	return Resolution{LatestMajor: latestMajor, Reason: "already on latest stable version"}
 }
 
-func isSameMajorExactUpgradeModel(current Version, candidate *Candidate) bool {
+func isSameMajorExactCurrentUpgradeModel(current Version, candidate *Candidate) bool {
 	if candidate == nil || current.Major != candidate.Version.Major {
 		return false
 	}
-	if current.Precision != PrecisionExact || candidate.Version.Precision != PrecisionExact {
+	if current.Precision != PrecisionExact {
 		return false
 	}
 	return compareNumericVersion(current, candidate.Version) < 0

@@ -406,9 +406,31 @@ func resolveCurrentMajor(current Version, candidates []majorCandidates, eligible
 			return decisionForCandidate(candidate.MovingMinor, reasonCurrentMajorMoving, reasonCurrentMovingCooldown, eligible)
 		}
 	case PrecisionExact:
-		if isSameMajorExactUpgrade(current, candidate.Exact) {
-			return decisionForCandidate(candidate.Exact, reasonCurrentMajorStable, reasonCurrentStableCooldown, eligible)
+		return firstEligibleCurrentMajorExactUpgrade(current, candidate, eligible)
+	}
+	return noUpdate(reasonAlreadyLatestStable), nil
+}
+
+func firstEligibleCurrentMajorExactUpgrade(current Version, candidate majorCandidates, eligible func(*Candidate) (bool, error)) (Decision, error) {
+	foundBlocked := false
+	for _, target := range []*Candidate{candidate.MovingMajor, candidate.MovingMinor, candidate.Exact} {
+		if !isSameMajorExactCurrentUpgrade(current, target) {
+			continue
 		}
+		isEligible, err := eligible(target)
+		if err != nil {
+			return Decision{}, err
+		}
+		if isEligible {
+			if target.Version.Precision == PrecisionExact {
+				return upgrade(target.Version, reasonCurrentMajorStable), nil
+			}
+			return upgrade(target.Version, reasonCurrentMajorMoving), nil
+		}
+		foundBlocked = true
+	}
+	if foundBlocked {
+		return noUpdate(reasonCurrentStableCooldown), nil
 	}
 	return noUpdate(reasonAlreadyLatestStable), nil
 }
@@ -546,11 +568,11 @@ func precisionFromStable(version actionspec.StableVersion) Precision {
 	return PrecisionExact
 }
 
-func isSameMajorExactUpgrade(current Version, candidate *Candidate) bool {
+func isSameMajorExactCurrentUpgrade(current Version, candidate *Candidate) bool {
 	if candidate == nil || current.Major != candidate.Version.Major {
 		return false
 	}
-	if current.Precision != PrecisionExact || candidate.Version.Precision != PrecisionExact {
+	if current.Precision != PrecisionExact {
 		return false
 	}
 	return compareNumericVersion(current, candidate.Version) < 0

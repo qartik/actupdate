@@ -44,14 +44,11 @@ func main() {
 }
 
 func run(args []string, in io.Reader, out, errOut io.Writer, httpClient *http.Client, githubBaseURL string) int {
-	if isHelpArgs(args) {
-		fs, _ := newFlagSet(out)
-		_ = fs.Parse(args)
-		return exitOK
-	}
-
-	opts, err := parseArgs(args)
+	opts, err := parseArgs(args, out)
 	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return exitOK
+		}
 		fmt.Fprintln(errOut, err)
 		return exitInvalidInput
 	}
@@ -138,7 +135,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer, httpClient *http.Cl
 	return exitOK
 }
 
-func parseArgs(args []string) (*cliOptions, error) {
+func parseArgs(args []string, flagOut io.Writer) (*cliOptions, error) {
 	if len(args) > 0 && args[0] == "version" {
 		if len(args) > 1 {
 			return nil, fmt.Errorf("version does not accept additional arguments")
@@ -146,11 +143,8 @@ func parseArgs(args []string) (*cliOptions, error) {
 		return nil, nil
 	}
 
-	fs, opts := newFlagSet(io.Discard)
+	fs, opts := newFlagSet(flagOut)
 	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil, nil
-		}
 		return nil, err
 	}
 	if fs.NArg() != 0 {
@@ -188,10 +182,6 @@ Flags:
 	fs.StringVar(&opts.GitHubToken, "github-token", "", "GitHub token override")
 	fs.IntVar(&opts.CooldownDays, "cooldown-days", 0, "minimum tag age in days before upgrading")
 	return fs, opts
-}
-
-func isHelpArgs(args []string) bool {
-	return len(args) == 1 && (args[0] == "-h" || args[0] == "-help" || args[0] == "--help")
 }
 
 func cooldownDuration(days int) (time.Duration, error) {
