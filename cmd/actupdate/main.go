@@ -46,6 +46,10 @@ func main() {
 func run(args []string, in io.Reader, out, errOut io.Writer, httpClient *http.Client, githubBaseURL string) int {
 	opts, err := parseArgs(args)
 	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			printUsage(out)
+			return exitOK
+		}
 		fmt.Fprintln(errOut, err)
 		return exitInvalidInput
 	}
@@ -140,13 +144,7 @@ func parseArgs(args []string) (*cliOptions, error) {
 		return nil, nil
 	}
 
-	fs := flag.NewFlagSet("actupdate", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	opts := &cliOptions{}
-	fs.StringVar(&opts.Repo, "repo", "", "path to repository root")
-	fs.BoolVar(&opts.Yes, "yes", false, "apply without prompting")
-	fs.StringVar(&opts.GitHubToken, "github-token", "", "GitHub token override")
-	fs.IntVar(&opts.CooldownDays, "cooldown-days", 0, "minimum tag age in days before upgrading")
+	fs, opts := newFlagSet(io.Discard)
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
@@ -160,6 +158,36 @@ func parseArgs(args []string) (*cliOptions, error) {
 		return nil, fmt.Errorf("--cooldown-days must be at most %d", maxCooldownDays)
 	}
 	return opts, nil
+}
+
+func newFlagSet(out io.Writer) (*flag.FlagSet, *cliOptions) {
+	fs := flag.NewFlagSet("actupdate", flag.ContinueOnError)
+	fs.SetOutput(out)
+	fs.Usage = func() {
+		fmt.Fprint(out, `Usage of actupdate:
+
+Updates GitHub Action references in .github/workflows/*.yml and *.yaml files
+to the latest eligible stable version.
+
+Commands:
+  actupdate [flags]
+  actupdate version
+
+Flags:
+`)
+		fs.PrintDefaults()
+	}
+	opts := &cliOptions{}
+	fs.StringVar(&opts.Repo, "repo", "", "path to repository root")
+	fs.BoolVar(&opts.Yes, "yes", false, "apply without prompting")
+	fs.StringVar(&opts.GitHubToken, "github-token", "", "GitHub token override")
+	fs.IntVar(&opts.CooldownDays, "cooldown-days", 0, "minimum tag age in days before upgrading")
+	return fs, opts
+}
+
+func printUsage(out io.Writer) {
+	fs, _ := newFlagSet(out)
+	fs.Usage()
 }
 
 func cooldownDuration(days int) (time.Duration, error) {
@@ -210,7 +238,6 @@ func useColor(out io.Writer) bool {
 func buildReport(ctx context.Context, scans []workflows.FileScan, client *gh.Client, cooldown time.Duration) (plan.Report, []workflows.Change, bool, error) {
 	report := plan.Report{}
 	var changes []workflows.Change
-	repoResults := map[string]repoOutcome{}
 	hadVerificationFailure := false
 
 	for _, scan := range scans {
@@ -254,7 +281,7 @@ func buildReport(ctx context.Context, scans []workflows.FileScan, client *gh.Cli
 				continue
 			}
 
-			currentMajor, err := actionspec.ParseMajor(spec.Ref)
+			currentVersion, err := actionspec.ParseStableVersion(spec.Ref)
 			if err != nil {
 				entry.Status = plan.StatusSkipped
 				entry.Reason = "non-semver ref"
@@ -262,12 +289,8 @@ func buildReport(ctx context.Context, scans []workflows.FileScan, client *gh.Cli
 				continue
 			}
 
-			outcome, ok := repoResults[spec.Repo]
-			if !ok {
-				resolution, resolveErr := client.ResolveLatestMajor(ctx, spec.Repo, currentMajor, cooldown)
-				outcome = repoOutcome{Resolution: resolution, Err: resolveErr}
-				repoResults[spec.Repo] = outcome
-			}
+			resolution, resolveErr := client.ResolveLatestStable(ctx, spec.Repo, currentVersion, cooldown)
+			outcome := repoOutcome{Resolution: resolution, Err: resolveErr}
 
 			if outcome.Err != nil {
 				entry.Status = plan.StatusError
