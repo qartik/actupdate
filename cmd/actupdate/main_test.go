@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,7 +13,7 @@ import (
 )
 
 func TestParseArgsCooldownDays(t *testing.T) {
-	opts, err := parseArgs([]string{"--cooldown-days", "7"}, io.Discard)
+	opts, err := parseArgs([]string{"--cooldown-days", "7"})
 	if err != nil {
 		t.Fatalf("parse args: %v", err)
 	}
@@ -24,14 +23,14 @@ func TestParseArgsCooldownDays(t *testing.T) {
 }
 
 func TestParseArgsRejectsNegativeCooldownDays(t *testing.T) {
-	if _, err := parseArgs([]string{"--cooldown-days", "-1"}, io.Discard); err == nil {
+	if _, err := parseArgs([]string{"--cooldown-days", "-1"}); err == nil {
 		t.Fatal("expected error")
 	}
 }
 
 func TestParseArgsRejectsOverflowingCooldownDays(t *testing.T) {
 	tooLarge := fmt.Sprintf("%d", maxCooldownDays+1)
-	if _, err := parseArgs([]string{"--cooldown-days", tooLarge}, io.Discard); err == nil {
+	if _, err := parseArgs([]string{"--cooldown-days", tooLarge}); err == nil {
 		t.Fatal("expected error")
 	}
 }
@@ -59,6 +58,21 @@ func TestRunHelpWithOtherFlags(t *testing.T) {
 	}
 	if got := stdout.String(); !strings.Contains(got, "Usage of actupdate:") {
 		t.Fatalf("expected usage output, got %q", got)
+	}
+}
+
+func TestRunInvalidFlagUsesStderrOnly(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--unknown"}, strings.NewReader(""), &stdout, &stderr, http.DefaultClient, "")
+	if exitCode != exitInvalidInput {
+		t.Fatalf("expected invalid input exit, got %d", exitCode)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("expected empty stdout, got %q", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "flag provided but not defined") {
+		t.Fatalf("expected flag error on stderr, got %q", got)
 	}
 }
 
