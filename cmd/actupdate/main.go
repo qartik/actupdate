@@ -21,7 +21,7 @@ import (
 	"golang.org/x/term"
 )
 
-const version = "0.1.0"
+var version = "dev"
 
 const (
 	exitOK = iota
