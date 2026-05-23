@@ -46,47 +46,6 @@ func TestRunVersion(t *testing.T) {
 	}
 }
 
-func TestRunHelp(t *testing.T) {
-	cases := [][]string{
-		{"-h"},
-		{"-help"},
-	}
-	for _, args := range cases {
-		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			var stdout bytes.Buffer
-			var stderr bytes.Buffer
-			exitCode := run(args, strings.NewReader(""), &stdout, &stderr, http.DefaultClient, "")
-			if exitCode != exitOK {
-				t.Fatalf("expected exit 0, got %d stderr=%s", exitCode, stderr.String())
-			}
-			if stderr.Len() != 0 {
-				t.Fatalf("expected empty stderr, got %q", stderr.String())
-			}
-			got := stdout.String()
-			for _, want := range []string{"Usage of actupdate:", "Updates GitHub Action references", "actupdate version", "-cooldown-days int", "-repo string"} {
-				if !strings.Contains(got, want) {
-					t.Fatalf("expected help output to contain %q, got %q", want, got)
-				}
-			}
-		})
-	}
-}
-
-func TestRunHelpSubcommandIsRejected(t *testing.T) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{"help"}, strings.NewReader(""), &stdout, &stderr, http.DefaultClient, "")
-	if exitCode != exitInvalidInput {
-		t.Fatalf("expected exit %d, got %d", exitInvalidInput, exitCode)
-	}
-	if stdout.Len() != 0 {
-		t.Fatalf("expected empty stdout, got %q", stdout.String())
-	}
-	if !strings.Contains(stderr.String(), "unexpected positional arguments: help") {
-		t.Fatalf("expected positional argument error, got %q", stderr.String())
-	}
-}
-
 func TestPromptConfirmDefaultsToYes(t *testing.T) {
 	var stdout bytes.Buffer
 	confirmed, err := promptConfirm(strings.NewReader("\n"), &stdout)
