@@ -49,6 +49,22 @@ func TestResolveLatestMajorFallsBackToExactTag(t *testing.T) {
 	}
 }
 
+func TestResolveLatestMajorLabelsMovingMinorUpgrade(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"name":"v6.2"},{"name":"v6.2.1"},{"name":"v5.9.0"}]`)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client(), server.URL, "")
+	result, err := client.ResolveLatestMajor(context.Background(), "actions/checkout", 4, 0)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !result.HasUpgrade || result.TargetRef != "v6.2" || result.Reason != "moving minor tag" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
 func TestResolveLatestStableUpdatesWithinCurrentMajor(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `[{"name":"v3.3"},{"name":"v3.0"},{"name":"v2.9"}]`)
@@ -81,6 +97,22 @@ func TestResolveLatestStableLeavesCurrentMajorMovingTagUnchanged(t *testing.T) {
 	}
 	if result.Reason != "already on latest stable version" {
 		t.Fatalf("unexpected reason: %q", result.Reason)
+	}
+}
+
+func TestResolveLatestStableLabelsNewerMajorMovingMinorUpgrade(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"name":"v6.2"},{"name":"v6.2.1"},{"name":"v5.1.0"}]`)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client(), server.URL, "")
+	result, err := client.ResolveLatestStable(context.Background(), "pypa/cibuildwheel", mustParseStableVersion(t, "v5.1.0"), 0)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !result.HasUpgrade || result.TargetRef != "v6.2" || result.Reason != "moving minor tag" {
+		t.Fatalf("unexpected result: %+v", result)
 	}
 }
 
@@ -678,7 +710,7 @@ func resolveLatestMajorPolicyModel(currentMajor int, candidates []majorCandidate
 		}
 		if movingRef, eligible, ok := preferredMovingUpgrade(candidate); ok {
 			if eligible {
-				return Resolution{TargetRef: movingRef.Original, HasUpgrade: true, Reason: "moving major tag", LatestMajor: latestMajor}
+				return Resolution{TargetRef: movingRef.Original, HasUpgrade: true, Reason: movingUpgradeReason(movingRef), LatestMajor: latestMajor}
 			}
 			blocked = true
 		}
@@ -711,7 +743,7 @@ func resolveLatestStablePolicyModel(current actionspec.StableVersion, candidates
 		}
 		if movingRef, eligible, ok := preferredMovingUpgrade(candidate); ok {
 			if eligible {
-				return Resolution{TargetRef: movingRef.Original, HasUpgrade: true, Reason: "moving major tag", LatestMajor: latestMajor}
+				return Resolution{TargetRef: movingRef.Original, HasUpgrade: true, Reason: movingUpgradeReason(movingRef), LatestMajor: latestMajor}
 			}
 			blockedNewer = true
 		}

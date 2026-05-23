@@ -424,7 +424,7 @@ func resolveLatestMajorPolicy(currentMajor int, candidates []majorCandidates) Re
 				return Resolution{
 					TargetRef:   movingRef.Original,
 					HasUpgrade:  true,
-					Reason:      "moving major tag",
+					Reason:      movingUpgradeReason(movingRef),
 					LatestMajor: latestMajor,
 				}
 			}
@@ -467,7 +467,7 @@ func resolveLatestStablePolicy(current actionspec.StableVersion, candidates []ma
 				return Resolution{
 					TargetRef:   movingRef.Original,
 					HasUpgrade:  true,
-					Reason:      "moving major tag",
+					Reason:      movingUpgradeReason(movingRef),
 					LatestMajor: latestMajor,
 				}
 			}
@@ -677,6 +677,13 @@ func preferredMovingUpgrade(candidate majorCandidates) (actionspec.StableVersion
 		return candidate.MovingMinor, candidate.MovingMinorEligible, true
 	}
 	return actionspec.StableVersion{}, false, false
+}
+
+func movingUpgradeReason(tag actionspec.StableVersion) string {
+	if isMajorMovingRef(tag) {
+		return "moving major tag"
+	}
+	return "moving minor tag"
 }
 
 func samePrecisionMovingCandidate(current actionspec.StableVersion, candidate majorCandidates) (actionspec.StableVersion, bool, bool) {
