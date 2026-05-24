@@ -1,10 +1,14 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  release:
+    types:
+      - published
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build, such as v0.2.0"
+        required: true
 
 permissions:
   contents: write
@@ -25,9 +29,12 @@ jobs:
             goarch: arm64
     env:
       CGO_ENABLED: "0"
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
       - name: Check out code
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -46,8 +53,13 @@ jobs:
           mkdir -p dist
           binary_name="actupdate"
           asset_dir="dist/actupdate_${GOOS}_${GOARCH}"
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "release tag must be a stable semver tag like v0.2.0" >&2
+            exit 1
+          fi
+          version="${RELEASE_TAG#v}"
           mkdir -p "${asset_dir}"
-          go build -o "${asset_dir}/${binary_name}" ./cmd/actupdate
+          go build -ldflags "-X main.version=${version}" -o "${asset_dir}/${binary_name}" ./cmd/actupdate
           tar -C dist -czf "${asset_dir}.tar.gz" "actupdate_${GOOS}_${GOARCH}"
 
       - name: Upload release artifact
@@ -74,4 +86,5 @@ jobs:
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ github.event.release.tag_name || inputs.tag }}
           files: release-assets/*.tar.gz

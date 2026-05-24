@@ -62,8 +62,10 @@ GITHUB_TOKEN="$(gh auth token)" actupdate
 
 ## Releases
 
-Push a tag like `v0.1.0` to trigger the release workflow. It builds and uploads
-tarballs for:
+Create and publish a GitHub release with a tag like `v0.2.0` from
+<https://github.com/qartik/actupdate/releases/new>. The release workflow builds
+the binaries from that tag, injects the tag version into `actupdate version`,
+and uploads tarballs for:
 
 - `linux/amd64`
 - `linux/arm64`
@@ -71,6 +73,12 @@ tarballs for:
 
 Each release asset is named like `actupdate_linux_amd64.tar.gz` and contains the
 `actupdate` binary.
+
+If a release build needs to be rerun, dispatch the release workflow manually and
+provide the existing release tag.
+
+Source builds report Go build metadata, such as a tagged version, pseudo-version,
+or `devel-<commit>` fallback when no release version is injected.
 
 ## Verification Rules
 
