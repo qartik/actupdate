@@ -32,6 +32,7 @@ const (
 )
 
 const maxCooldownDays = int64(math.MaxInt64 / int64(24*time.Hour))
+const shortRevisionLength = 12
 
 type cliOptions struct {
 	Repo         string
@@ -241,8 +242,8 @@ func versionFromBuildInfo(info *debug.BuildInfo) string {
 	if revision == "" {
 		return ""
 	}
-	if len(revision) > 12 {
-		revision = revision[:12]
+	if len(revision) > shortRevisionLength {
+		revision = revision[:shortRevisionLength]
 	}
 	out := "devel-" + revision
 	if modified {

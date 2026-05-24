@@ -53,6 +53,10 @@ jobs:
           mkdir -p dist
           binary_name="actupdate"
           asset_dir="dist/actupdate_${GOOS}_${GOARCH}"
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "release tag must be a stable semver tag like v0.2.0" >&2
+            exit 1
+          fi
           version="${RELEASE_TAG#v}"
           mkdir -p "${asset_dir}"
           go build -ldflags "-X main.version=${version}" -o "${asset_dir}/${binary_name}" ./cmd/actupdate
