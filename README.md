@@ -77,6 +77,9 @@ Each release asset is named like `actupdate_linux_amd64.tar.gz` and contains the
 If a release build needs to be rerun, dispatch the release workflow manually and
 provide the existing release tag.
 
+Source builds report Go build metadata, such as a tagged version, pseudo-version,
+or `devel-<commit>` fallback when no release version is injected.
+
 ## Verification Rules
 
 - Only stable semver tags are considered

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -21,7 +22,7 @@ import (
 	"golang.org/x/term"
 )
 
-var version = "dev"
+var version string
 
 const (
 	exitOK = iota
@@ -54,7 +55,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer, httpClient *http.Cl
 		return exitInvalidInput
 	}
 	if opts == nil {
-		fmt.Fprintln(out, version)
+		fmt.Fprintln(out, displayVersion())
 		return exitOK
 	}
 
@@ -208,6 +209,46 @@ func resolveToken(explicit string) string {
 		return token
 	}
 	return os.Getenv("GH_TOKEN")
+}
+
+func displayVersion() string {
+	if version != "" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if buildVersion := versionFromBuildInfo(info); buildVersion != "" {
+			return buildVersion
+		}
+	}
+	return "unknown"
+}
+
+func versionFromBuildInfo(info *debug.BuildInfo) string {
+	if info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+
+	var revision string
+	modified := false
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			revision = setting.Value
+		case "vcs.modified":
+			modified = setting.Value == "true"
+		}
+	}
+	if revision == "" {
+		return ""
+	}
+	if len(revision) > 12 {
+		revision = revision[:12]
+	}
+	out := "devel-" + revision
+	if modified {
+		out += "+dirty"
+	}
+	return out
 }
 
 func promptConfirm(in io.Reader, out io.Writer) (bool, error) {

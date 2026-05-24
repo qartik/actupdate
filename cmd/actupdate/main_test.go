@@ -7,10 +7,20 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
 )
+
+func withVersion(t *testing.T, value string) {
+	t.Helper()
+	previous := version
+	version = value
+	t.Cleanup(func() {
+		version = previous
+	})
+}
 
 func TestParseArgsCooldownDays(t *testing.T) {
 	opts, err := parseArgs([]string{"--cooldown-days", "7"})
@@ -36,13 +46,37 @@ func TestParseArgsRejectsOverflowingCooldownDays(t *testing.T) {
 }
 
 func TestRunVersion(t *testing.T) {
+	withVersion(t, "1.2.3")
+
 	var stdout bytes.Buffer
 	exitCode := run([]string{"version"}, strings.NewReader(""), &stdout, &bytes.Buffer{}, http.DefaultClient, "")
 	if exitCode != exitOK {
 		t.Fatalf("expected exit 0, got %d", exitCode)
 	}
-	if got := strings.TrimSpace(stdout.String()); got != version {
+	if got := strings.TrimSpace(stdout.String()); got != "1.2.3" {
 		t.Fatalf("unexpected version output: %q", got)
+	}
+}
+
+func TestVersionFromBuildInfoUsesModuleVersion(t *testing.T) {
+	got := versionFromBuildInfo(&debug.BuildInfo{
+		Main: debug.Module{Version: "v0.2.0"},
+	})
+	if got != "v0.2.0" {
+		t.Fatalf("unexpected version: %q", got)
+	}
+}
+
+func TestVersionFromBuildInfoUsesVCSRevisionForDevelopmentBuild(t *testing.T) {
+	got := versionFromBuildInfo(&debug.BuildInfo{
+		Main: debug.Module{Version: "(devel)"},
+		Settings: []debug.BuildSetting{
+			{Key: "vcs.revision", Value: "0123456789abcdef"},
+			{Key: "vcs.modified", Value: "true"},
+		},
+	})
+	if got != "devel-0123456789ab+dirty" {
+		t.Fatalf("unexpected version: %q", got)
 	}
 }
 
