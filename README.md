@@ -8,13 +8,15 @@ eligible stable version.
 Run `actupdate` inside a git repo and it will:
 
 1. Scan `.github/workflows/*.yml` and `.github/workflows/*.yaml`
-2. Find remote `uses:` references such as `actions/checkout@v4`
-3. Query GitHub for the action repository's tags
-4. Prefer moving tags such as `v6` or `v6.2` when the action publishes them
-5. Fall back to the latest verified stable exact tag such as `v6.2.1` when the
+2. Optionally scan nested `action.yml` and `action.yaml` files when
+   `--include-composite-actions` is set
+3. Find remote `uses:` references such as `actions/checkout@v4`
+4. Query GitHub for the action repository's tags
+5. Prefer moving tags such as `v6` or `v6.2` when the action publishes them
+6. Fall back to the latest verified stable exact tag such as `v6.2.1` when the
    repo does not publish an eligible moving tag
-6. Show the planned updates with colorized terminal output when supported
-7. Prompt once before rewriting files; pressing Enter accepts the default and
+7. Show the planned updates with colorized terminal output when supported
+8. Prompt once before rewriting files; pressing Enter accepts the default and
    applies the changes
 
 The tool skips local actions, Docker references, SHA pins, branch refs, and
@@ -31,6 +33,7 @@ Options:
 ```bash
 actupdate --repo /path/to/repo
 actupdate --yes
+actupdate --include-composite-actions
 actupdate --cooldown-days 7
 actupdate --github-token "$GITHUB_TOKEN"
 actupdate version
@@ -40,6 +43,8 @@ Flags:
 
 - `--repo`: operate on a different repo root instead of the current directory
 - `--yes`: apply immediately after printing the plan
+- `--include-composite-actions`: also scan nested `action.yml` and
+  `action.yaml` files outside `.github/workflows`
 - `--cooldown-days`: ignore candidate tags newer than the given number of days
 - `--github-token`: override token lookup; otherwise the tool uses
   `GITHUB_TOKEN`, then `GH_TOKEN`
