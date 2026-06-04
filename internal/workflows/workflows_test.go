@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -181,6 +182,13 @@ func TestApplyRollsBackOnInvalidYAML(t *testing.T) {
 	err = Apply(repo, []Change{{Match: scans[0].Matches[0], NewRef: "v6"}})
 	if err == nil {
 		t.Fatal("expected error")
+	}
+	var invalidErr *InvalidYAMLError
+	if !errors.As(err, &invalidErr) {
+		t.Fatalf("expected InvalidYAMLError, got %T", err)
+	}
+	if invalidErr.Path != workflow {
+		t.Fatalf("expected path %q, got %q", workflow, invalidErr.Path)
 	}
 
 	updated, readErr := os.ReadFile(workflow)

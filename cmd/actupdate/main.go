@@ -78,19 +78,19 @@ func run(args []string, in io.Reader, out, errOut io.Writer, httpClient *http.Cl
 	discoverOpts := workflows.DiscoverOptions{
 		IncludeCompositeActions: opts.IncludeCompositeActions,
 	}
-	workflowFiles, err := workflows.Discover(repoRoot, discoverOpts)
+	sourceFiles, err := workflows.Discover(repoRoot, discoverOpts)
 	if err != nil {
-		fmt.Fprintf(errOut, "failed to discover workflow and action files: %v\n", err)
+		fmt.Fprintf(errOut, "failed to discover %s: %v\n", discoverTargetLabel(opts.IncludeCompositeActions), err)
 		return exitInvalidInput
 	}
-	if len(workflowFiles) == 0 {
-		fmt.Fprintf(out, "No workflow or composite action files found in %s\n", repoRoot)
+	if len(sourceFiles) == 0 {
+		fmt.Fprintf(out, "No %s found in %s\n", discoverTargetLabel(opts.IncludeCompositeActions), repoRoot)
 		return exitOK
 	}
 
-	scans, err := workflows.ScanFiles(repoRoot, workflowFiles)
+	scans, err := workflows.ScanFiles(repoRoot, sourceFiles)
 	if err != nil {
-		fmt.Fprintf(errOut, "failed to scan workflow and action files: %v\n", err)
+		fmt.Fprintf(errOut, "failed to scan %s: %v\n", discoverTargetLabel(opts.IncludeCompositeActions), err)
 		return exitInvalidInput
 	}
 
@@ -129,9 +129,9 @@ func run(args []string, in io.Reader, out, errOut io.Writer, httpClient *http.Cl
 	}
 
 	if err := workflows.Apply(repoRoot, changes); err != nil {
-		var invalidErr *workflows.InvalidWorkflowError
+		var invalidErr *workflows.InvalidYAMLError
 		if errors.As(err, &invalidErr) {
-			fmt.Fprintf(errOut, "invalid rewritten workflow: %v\n", err)
+			fmt.Fprintf(errOut, "invalid rewritten YAML: %v\n", err)
 			return exitInvalidInput
 		}
 		fmt.Fprintf(errOut, "failed to apply changes: %v\n", err)
@@ -191,6 +191,13 @@ Flags:
 	fs.IntVar(&opts.CooldownDays, "cooldown-days", 0, "minimum tag age in days before upgrading")
 	fs.BoolVar(&opts.IncludeCompositeActions, "include-composite-actions", false, "scan nested action.yml and action.yaml composite actions")
 	return fs, opts
+}
+
+func discoverTargetLabel(includeCompositeActions bool) string {
+	if includeCompositeActions {
+		return "workflow or composite action files"
+	}
+	return "workflow files"
 }
 
 func printUsage(out io.Writer) {

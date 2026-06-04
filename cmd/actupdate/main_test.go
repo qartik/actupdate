@@ -132,6 +132,23 @@ func TestRunNoFilesFound(t *testing.T) {
 	if stderr.Len() != 0 {
 		t.Fatalf("expected empty stderr, got %q", stderr.String())
 	}
+	if got := stdout.String(); !strings.Contains(got, "No workflow files found") {
+		t.Fatalf("unexpected stdout: %q", got)
+	}
+}
+
+func TestRunNoFilesFoundWithCompositeActionsEnabled(t *testing.T) {
+	repo := t.TempDir()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--repo", repo, "--include-composite-actions"}, strings.NewReader(""), &stdout, &stderr, http.DefaultClient, "")
+	if exitCode != exitOK {
+		t.Fatalf("expected exit 0, got %d stderr=%s", exitCode, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected empty stderr, got %q", stderr.String())
+	}
 	if got := stdout.String(); !strings.Contains(got, "No workflow or composite action files found") {
 		t.Fatalf("unexpected stdout: %q", got)
 	}

@@ -40,16 +40,16 @@ type DiscoverOptions struct {
 	IncludeCompositeActions bool
 }
 
-type InvalidWorkflowError struct {
+type InvalidYAMLError struct {
 	Path string
 	Err  error
 }
 
-func (e *InvalidWorkflowError) Error() string {
+func (e *InvalidYAMLError) Error() string {
 	return fmt.Sprintf("%s: %v", e.Path, e.Err)
 }
 
-func (e *InvalidWorkflowError) Unwrap() error {
+func (e *InvalidYAMLError) Unwrap() error {
 	return e.Err
 }
 
@@ -207,7 +207,7 @@ func Apply(repoRoot string, changes []Change) error {
 		}
 		if err := validateYAML(rewritten); err != nil {
 			restoreFiles(originals, written)
-			return &InvalidWorkflowError{Path: path, Err: err}
+			return &InvalidYAMLError{Path: path, Err: err}
 		}
 	}
 
