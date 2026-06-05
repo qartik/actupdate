@@ -35,10 +35,11 @@ const maxCooldownDays = int64(math.MaxInt64 / int64(24*time.Hour))
 const shortRevisionLength = 12
 
 type cliOptions struct {
-	Repo         string
-	Yes          bool
-	GitHubToken  string
-	CooldownDays int
+	Repo                    string
+	Yes                     bool
+	GitHubToken             string
+	CooldownDays            int
+	IncludeCompositeActions bool
 }
 
 func main() {
@@ -74,19 +75,22 @@ func run(args []string, in io.Reader, out, errOut io.Writer, httpClient *http.Cl
 		return exitOperationalError
 	}
 
-	workflowFiles, err := workflows.Discover(repoRoot)
+	discoverOpts := workflows.DiscoverOptions{
+		IncludeCompositeActions: opts.IncludeCompositeActions,
+	}
+	sourceFiles, err := workflows.Discover(repoRoot, discoverOpts)
 	if err != nil {
-		fmt.Fprintf(errOut, "failed to discover workflow files: %v\n", err)
+		fmt.Fprintf(errOut, "failed to discover %s: %v\n", discoverTargetLabel(opts.IncludeCompositeActions), err)
 		return exitInvalidInput
 	}
-	if len(workflowFiles) == 0 {
-		fmt.Fprintf(out, "No workflow files found under %s\n", filepath.Join(repoRoot, ".github", "workflows"))
+	if len(sourceFiles) == 0 {
+		fmt.Fprintf(out, "No %s found in %s\n", discoverTargetLabel(opts.IncludeCompositeActions), repoRoot)
 		return exitOK
 	}
 
-	scans, err := workflows.ScanFiles(repoRoot, workflowFiles)
+	scans, err := workflows.ScanFiles(repoRoot, sourceFiles)
 	if err != nil {
-		fmt.Fprintf(errOut, "failed to scan workflow files: %v\n", err)
+		fmt.Fprintf(errOut, "failed to scan %s: %v\n", discoverTargetLabel(opts.IncludeCompositeActions), err)
 		return exitInvalidInput
 	}
 
@@ -125,9 +129,9 @@ func run(args []string, in io.Reader, out, errOut io.Writer, httpClient *http.Cl
 	}
 
 	if err := workflows.Apply(repoRoot, changes); err != nil {
-		var invalidErr *workflows.InvalidWorkflowError
+		var invalidErr *workflows.InvalidYAMLError
 		if errors.As(err, &invalidErr) {
-			fmt.Fprintf(errOut, "invalid rewritten workflow: %v\n", err)
+			fmt.Fprintf(errOut, "invalid rewritten YAML: %v\n", err)
 			return exitInvalidInput
 		}
 		fmt.Fprintf(errOut, "failed to apply changes: %v\n", err)
@@ -169,7 +173,8 @@ func newFlagSet(out io.Writer) (*flag.FlagSet, *cliOptions) {
 		fmt.Fprint(out, `Usage of actupdate:
 
 Updates GitHub Action references in .github/workflows/*.yml and *.yaml files
-to the latest eligible stable version.
+to the latest eligible stable version. Use --include-composite-actions to also
+scan nested action.yml and action.yaml composite actions.
 
 Commands:
   actupdate [flags]
@@ -184,7 +189,15 @@ Flags:
 	fs.BoolVar(&opts.Yes, "yes", false, "apply without prompting")
 	fs.StringVar(&opts.GitHubToken, "github-token", "", "GitHub token override")
 	fs.IntVar(&opts.CooldownDays, "cooldown-days", 0, "minimum tag age in days before upgrading")
+	fs.BoolVar(&opts.IncludeCompositeActions, "include-composite-actions", false, "scan nested action.yml and action.yaml composite actions")
 	return fs, opts
+}
+
+func discoverTargetLabel(includeCompositeActions bool) string {
+	if includeCompositeActions {
+		return "workflow or composite action files"
+	}
+	return "workflow files"
 }
 
 func printUsage(out io.Writer) {

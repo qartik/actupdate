@@ -32,6 +32,16 @@ func TestParseArgsCooldownDays(t *testing.T) {
 	}
 }
 
+func TestParseArgsIncludeCompositeActions(t *testing.T) {
+	opts, err := parseArgs([]string{"--include-composite-actions"})
+	if err != nil {
+		t.Fatalf("parse args: %v", err)
+	}
+	if !opts.IncludeCompositeActions {
+		t.Fatal("expected include composite actions to be enabled")
+	}
+}
+
 func TestParseArgsRejectsNegativeCooldownDays(t *testing.T) {
 	if _, err := parseArgs([]string{"--cooldown-days", "-1"}); err == nil {
 		t.Fatal("expected error")
@@ -107,6 +117,40 @@ func TestRunInvalidFlagUsesStderrOnly(t *testing.T) {
 	}
 	if got := stderr.String(); !strings.Contains(got, "flag provided but not defined") {
 		t.Fatalf("expected flag error on stderr, got %q", got)
+	}
+}
+
+func TestRunNoFilesFound(t *testing.T) {
+	repo := t.TempDir()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--repo", repo}, strings.NewReader(""), &stdout, &stderr, http.DefaultClient, "")
+	if exitCode != exitOK {
+		t.Fatalf("expected exit 0, got %d stderr=%s", exitCode, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected empty stderr, got %q", stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "No workflow files found") {
+		t.Fatalf("unexpected stdout: %q", got)
+	}
+}
+
+func TestRunNoFilesFoundWithCompositeActionsEnabled(t *testing.T) {
+	repo := t.TempDir()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--repo", repo, "--include-composite-actions"}, strings.NewReader(""), &stdout, &stderr, http.DefaultClient, "")
+	if exitCode != exitOK {
+		t.Fatalf("expected exit 0, got %d stderr=%s", exitCode, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected empty stderr, got %q", stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "No workflow or composite action files found") {
+		t.Fatalf("unexpected stdout: %q", got)
 	}
 }
 
@@ -340,5 +384,52 @@ func TestRunVerificationFailurePreventsWrites(t *testing.T) {
 	}
 	if string(updated) != original {
 		t.Fatalf("workflow should remain unchanged, got %q", string(updated))
+	}
+}
+
+func TestRunIncludeCompositeActionsUpdatesNestedActionMetadata(t *testing.T) {
+	repo := t.TempDir()
+	compositeDir := filepath.Join(repo, "py-release-checks")
+	if err := os.MkdirAll(compositeDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	actionPath := filepath.Join(compositeDir, "action.yml")
+	original := strings.Join([]string{
+		"name: release checks",
+		"runs:",
+		"  using: composite",
+		"  steps:",
+		"    - uses: actions/checkout@v4",
+		"",
+	}, "\n")
+	if err := os.WriteFile(actionPath, []byte(original), 0o644); err != nil {
+		t.Fatalf("write action metadata: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/actions/checkout/tags" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `[{"name":"v6"},{"name":"v5"},{"name":"v4"}]`)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--repo", repo, "--yes", "--include-composite-actions"}, strings.NewReader(""), &stdout, &stderr, server.Client(), server.URL)
+	if exitCode != exitOK {
+		t.Fatalf("expected exit 0, got %d stderr=%s", exitCode, stderr.String())
+	}
+
+	updated, err := os.ReadFile(actionPath)
+	if err != nil {
+		t.Fatalf("read action metadata: %v", err)
+	}
+	if got := string(updated); !strings.Contains(got, "actions/checkout@v6") {
+		t.Fatalf("expected updated action metadata, got %q", got)
+	}
+	if !strings.Contains(stdout.String(), "py-release-checks/action.yml") {
+		t.Fatalf("expected composite action path in output, got %q", stdout.String())
 	}
 }

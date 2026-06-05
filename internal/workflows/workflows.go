@@ -36,20 +36,24 @@ type Change struct {
 	NewRef string
 }
 
-type InvalidWorkflowError struct {
+type DiscoverOptions struct {
+	IncludeCompositeActions bool
+}
+
+type InvalidYAMLError struct {
 	Path string
 	Err  error
 }
 
-func (e *InvalidWorkflowError) Error() string {
+func (e *InvalidYAMLError) Error() string {
 	return fmt.Sprintf("%s: %v", e.Path, e.Err)
 }
 
-func (e *InvalidWorkflowError) Unwrap() error {
+func (e *InvalidYAMLError) Unwrap() error {
 	return e.Err
 }
 
-func Discover(repoRoot string) ([]string, error) {
+func Discover(repoRoot string, opts DiscoverOptions) ([]string, error) {
 	info, err := os.Stat(repoRoot)
 	if err != nil {
 		return nil, err
@@ -75,6 +79,31 @@ func Discover(repoRoot string) ([]string, error) {
 			}
 			seen[match] = struct{}{}
 			files = append(files, match)
+		}
+	}
+	if opts.IncludeCompositeActions {
+		if err := filepath.WalkDir(repoRoot, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				if d.Name() == ".git" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			name := d.Name()
+			if name != "action.yml" && name != "action.yaml" {
+				return nil
+			}
+			if _, ok := seen[path]; ok {
+				return nil
+			}
+			seen[path] = struct{}{}
+			files = append(files, path)
+			return nil
+		}); err != nil {
+			return nil, err
 		}
 	}
 	sort.Strings(files)
@@ -178,7 +207,7 @@ func Apply(repoRoot string, changes []Change) error {
 		}
 		if err := validateYAML(rewritten); err != nil {
 			restoreFiles(originals, written)
-			return &InvalidWorkflowError{Path: path, Err: err}
+			return &InvalidYAMLError{Path: path, Err: err}
 		}
 	}
 
