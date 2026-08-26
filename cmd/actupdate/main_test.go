@@ -59,7 +59,7 @@ func TestRunVersion(t *testing.T) {
 	withVersion(t, "1.2.3")
 
 	var stdout bytes.Buffer
-	exitCode := run([]string{"version"}, strings.NewReader(""), &stdout, &bytes.Buffer{}, http.DefaultClient, "")
+	exitCode := run([]string{"version"}, strings.NewReader(""), &stdout, &bytes.Buffer{}, http.DefaultClient, "", "")
 	if exitCode != exitOK {
 		t.Fatalf("expected exit 0, got %d", exitCode)
 	}
@@ -93,7 +93,7 @@ func TestVersionFromBuildInfoUsesVCSRevisionForDevelopmentBuild(t *testing.T) {
 func TestRunHelpWithOtherFlags(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := run([]string{"--help", "--repo", "."}, strings.NewReader(""), &stdout, &stderr, http.DefaultClient, "")
+	exitCode := run([]string{"--help", "--repo", "."}, strings.NewReader(""), &stdout, &stderr, http.DefaultClient, "", "")
 	if exitCode != exitOK {
 		t.Fatalf("expected exit 0, got %d stderr=%s", exitCode, stderr.String())
 	}
@@ -108,7 +108,7 @@ func TestRunHelpWithOtherFlags(t *testing.T) {
 func TestRunInvalidFlagUsesStderrOnly(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := run([]string{"--unknown"}, strings.NewReader(""), &stdout, &stderr, http.DefaultClient, "")
+	exitCode := run([]string{"--unknown"}, strings.NewReader(""), &stdout, &stderr, http.DefaultClient, "", "")
 	if exitCode != exitInvalidInput {
 		t.Fatalf("expected invalid input exit, got %d", exitCode)
 	}
@@ -125,7 +125,7 @@ func TestRunNoFilesFound(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := run([]string{"--repo", repo}, strings.NewReader(""), &stdout, &stderr, http.DefaultClient, "")
+	exitCode := run([]string{"--repo", repo}, strings.NewReader(""), &stdout, &stderr, http.DefaultClient, "", "")
 	if exitCode != exitOK {
 		t.Fatalf("expected exit 0, got %d stderr=%s", exitCode, stderr.String())
 	}
@@ -142,7 +142,7 @@ func TestRunNoFilesFoundWithCompositeActionsEnabled(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := run([]string{"--repo", repo, "--include-composite-actions"}, strings.NewReader(""), &stdout, &stderr, http.DefaultClient, "")
+	exitCode := run([]string{"--repo", repo, "--include-composite-actions"}, strings.NewReader(""), &stdout, &stderr, http.DefaultClient, "", "")
 	if exitCode != exitOK {
 		t.Fatalf("expected exit 0, got %d stderr=%s", exitCode, stderr.String())
 	}
@@ -202,7 +202,7 @@ func TestRunApplyYes(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := run([]string{"--repo", repo, "--yes"}, strings.NewReader(""), &stdout, &stderr, server.Client(), server.URL)
+	exitCode := run([]string{"--repo", repo, "--yes"}, strings.NewReader(""), &stdout, &stderr, server.Client(), server.URL, t.TempDir())
 	if exitCode != exitOK {
 		t.Fatalf("expected exit 0, got %d stderr=%s", exitCode, stderr.String())
 	}
@@ -248,7 +248,7 @@ func TestRunApplyYesWithCooldownDays(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := run([]string{"--repo", repo, "--yes", "--cooldown-days", "7"}, strings.NewReader(""), &stdout, &stderr, server.Client(), server.URL)
+	exitCode := run([]string{"--repo", repo, "--yes", "--cooldown-days", "7"}, strings.NewReader(""), &stdout, &stderr, server.Client(), server.URL, t.TempDir())
 	if exitCode != exitOK {
 		t.Fatalf("expected exit 0, got %d stderr=%s", exitCode, stderr.String())
 	}
@@ -296,7 +296,7 @@ func TestRunCooldownDaysLeavesTooNewMajorUnchanged(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := run([]string{"--repo", repo, "--yes", "--cooldown-days", "7"}, strings.NewReader(""), &stdout, &stderr, server.Client(), server.URL)
+	exitCode := run([]string{"--repo", repo, "--yes", "--cooldown-days", "7"}, strings.NewReader(""), &stdout, &stderr, server.Client(), server.URL, t.TempDir())
 	if exitCode != exitOK {
 		t.Fatalf("expected exit 0, got %d stderr=%s", exitCode, stderr.String())
 	}
@@ -336,7 +336,7 @@ func TestRunUpdatesOlderExactTagEvenWhenSameRepoHasNewerRef(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := run([]string{"--repo", repo, "--yes"}, strings.NewReader(""), &stdout, &stderr, server.Client(), server.URL)
+	exitCode := run([]string{"--repo", repo, "--yes"}, strings.NewReader(""), &stdout, &stderr, server.Client(), server.URL, t.TempDir())
 	if exitCode != exitOK {
 		t.Fatalf("expected exit 0, got %d stderr=%s", exitCode, stderr.String())
 	}
@@ -373,7 +373,7 @@ func TestRunVerificationFailurePreventsWrites(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := run([]string{"--repo", repo, "--yes"}, strings.NewReader(""), &stdout, &stderr, server.Client(), server.URL)
+	exitCode := run([]string{"--repo", repo, "--yes"}, strings.NewReader(""), &stdout, &stderr, server.Client(), server.URL, t.TempDir())
 	if exitCode != exitVerificationFailure {
 		t.Fatalf("expected exit 3, got %d", exitCode)
 	}
@@ -417,7 +417,7 @@ func TestRunIncludeCompositeActionsUpdatesNestedActionMetadata(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := run([]string{"--repo", repo, "--yes", "--include-composite-actions"}, strings.NewReader(""), &stdout, &stderr, server.Client(), server.URL)
+	exitCode := run([]string{"--repo", repo, "--yes", "--include-composite-actions"}, strings.NewReader(""), &stdout, &stderr, server.Client(), server.URL, t.TempDir())
 	if exitCode != exitOK {
 		t.Fatalf("expected exit 0, got %d stderr=%s", exitCode, stderr.String())
 	}

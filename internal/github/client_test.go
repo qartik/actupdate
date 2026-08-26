@@ -23,7 +23,7 @@ func TestResolveLatestStableReportsPublishedLatestMajor(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.Client(), server.URL, "")
+	client := newTestClient(t, server)
 	result, err := client.ResolveLatestStable(context.Background(), "actions/checkout", mustParseStableVersion(t, "v99.0.0"), 0)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -42,7 +42,7 @@ func TestResolveLatestStableTreatsEquivalentExactTagsAsUnchanged(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.Client(), server.URL, "")
+	client := newTestClient(t, server)
 	result, err := client.ResolveLatestStable(context.Background(), "pypa/cibuildwheel", mustParseStableVersion(t, "v3.0.0"), 0)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -61,7 +61,7 @@ func TestResolveLatestStableTreatsEquivalentExactTagsAsUnchangedForShorterCurren
 	}))
 	defer server.Close()
 
-	client := NewClient(server.Client(), server.URL, "")
+	client := newTestClient(t, server)
 	result, err := client.ResolveLatestStable(context.Background(), "pypa/cibuildwheel", mustParseStableVersion(t, "v3.0"), 0)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -80,7 +80,7 @@ func TestResolveLatestStableUpgradesExactRefToSameMajorMovingMinor(t *testing.T)
 	}))
 	defer server.Close()
 
-	client := NewClient(server.Client(), server.URL, "")
+	client := newTestClient(t, server)
 	result, err := client.ResolveLatestStable(context.Background(), "pypa/cibuildwheel", mustParseStableVersion(t, "v3.0.0"), 0)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -96,7 +96,7 @@ func TestResolveLatestMajorIgnoresPrerelease(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.Client(), server.URL, "")
+	client := newTestClient(t, server)
 	result, err := client.ResolveLatestMajor(context.Background(), "actions/checkout", 5, 0)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -112,7 +112,7 @@ func TestResolveLatestMajorHandlesNotFound(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.Client(), server.URL, "")
+	client := newTestClient(t, server)
 	if _, err := client.ResolveLatestMajor(context.Background(), "missing/repo", 4, 0); err == nil {
 		t.Fatal("expected error")
 	}
@@ -133,7 +133,7 @@ func TestResolveLatestMajorWithCooldownUsesOlderMovingTag(t *testing.T) {
 	})
 	defer server.Close()
 
-	client := NewClient(server.Client(), server.URL, "")
+	client := newTestClient(t, server)
 	client.now = func() time.Time { return now }
 
 	result, err := client.ResolveLatestMajor(context.Background(), "actions/checkout", 4, 7*24*time.Hour)
@@ -162,7 +162,7 @@ func TestResolveLatestMajorWithCooldownFallsBackFromMovingMajorToMovingMinor(t *
 	})
 	defer server.Close()
 
-	client := NewClient(server.Client(), server.URL, "")
+	client := newTestClient(t, server)
 	client.now = func() time.Time { return now }
 
 	result, err := client.ResolveLatestMajor(context.Background(), "actions/checkout", 4, 7*24*time.Hour)
@@ -192,7 +192,7 @@ func TestResolveLatestMajorWithCooldownFallsBackToExactTagWhenMovingTagBlocked(t
 	})
 	defer server.Close()
 
-	client := NewClient(server.Client(), server.URL, "")
+	client := newTestClient(t, server)
 	client.now = func() time.Time { return now }
 
 	result, err := client.ResolveLatestMajor(context.Background(), "actions/checkout", 4, 7*24*time.Hour)
@@ -219,7 +219,7 @@ func TestResolveLatestMajorWithCooldownSkipsMovingOnlyBlockedMajor(t *testing.T)
 	})
 	defer server.Close()
 
-	client := NewClient(server.Client(), server.URL, "")
+	client := newTestClient(t, server)
 	client.now = func() time.Time { return now }
 
 	result, err := client.ResolveLatestMajor(context.Background(), "actions/checkout", 4, 7*24*time.Hour)
@@ -244,7 +244,7 @@ func TestResolveLatestMajorWithCooldownMovingOnlyBlockedMajorReturnsCooldown(t *
 	})
 	defer server.Close()
 
-	client := NewClient(server.Client(), server.URL, "")
+	client := newTestClient(t, server)
 	client.now = func() time.Time { return now }
 
 	result, err := client.ResolveLatestMajor(context.Background(), "actions/checkout", 4, 7*24*time.Hour)
@@ -361,7 +361,7 @@ func TestResolveLatestMajorWithCooldownSkipsTooNewMajor(t *testing.T) {
 	})
 	defer server.Close()
 
-	client := NewClient(server.Client(), server.URL, "")
+	client := newTestClient(t, server)
 	client.now = func() time.Time { return now }
 
 	result, err := client.ResolveLatestMajor(context.Background(), "actions/checkout", 4, 7*24*time.Hour)
@@ -389,7 +389,7 @@ func TestResolveLatestMajorCooldownUsesAnnotatedTagTimestamp(t *testing.T) {
 	})
 	defer server.Close()
 
-	client := NewClient(server.Client(), server.URL, "")
+	client := newTestClient(t, server)
 	client.now = func() time.Time { return now }
 
 	result, err := client.ResolveLatestMajor(context.Background(), "actions/checkout", 5, 7*24*time.Hour)
@@ -414,7 +414,7 @@ func TestResolveLatestMajorCooldownUsesLightweightCommitTimestamp(t *testing.T) 
 	})
 	defer server.Close()
 
-	client := NewClient(server.Client(), server.URL, "")
+	client := newTestClient(t, server)
 	client.now = func() time.Time { return now }
 
 	result, err := client.ResolveLatestMajor(context.Background(), "actions/checkout", 5, 7*24*time.Hour)
@@ -441,7 +441,7 @@ func TestResolveLatestMajorCachesTagTimestamps(t *testing.T) {
 	})
 	defer server.Close()
 
-	client := NewClient(server.Client(), server.URL, "")
+	client := newTestClient(t, server)
 	client.now = func() time.Time { return now }
 
 	for range 2 {
@@ -477,7 +477,7 @@ func TestResolveLatestStableCooldownStopsAfterFirstEligibleNewerMajor(t *testing
 	})
 	defer server.Close()
 
-	client := NewClient(server.Client(), server.URL, "")
+	client := newTestClient(t, server)
 	client.now = func() time.Time { return now }
 
 	result, err := client.ResolveLatestStable(context.Background(), "actions/checkout", mustParseStableVersion(t, "v4"), 7*24*time.Hour)
@@ -512,7 +512,7 @@ func TestResolveLatestMajorEscapesTagPathSegments(t *testing.T) {
 	})
 	defer server.Close()
 
-	client := NewClient(server.Client(), server.URL, "")
+	client := newTestClient(t, server)
 	client.now = func() time.Time { return now }
 
 	publishedAt, err := client.tagPublishedAt(context.Background(), "actions/checkout", "release/6")

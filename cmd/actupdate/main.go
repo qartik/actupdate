@@ -43,10 +43,10 @@ type cliOptions struct {
 }
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, http.DefaultClient, gh.DefaultBaseURL))
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, http.DefaultClient, gh.DefaultBaseURL, ""))
 }
 
-func run(args []string, in io.Reader, out, errOut io.Writer, httpClient *http.Client, githubBaseURL string) int {
+func run(args []string, in io.Reader, out, errOut io.Writer, httpClient *http.Client, githubBaseURL, cacheDir string) int {
 	opts, err := parseArgs(args)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -101,6 +101,9 @@ func run(args []string, in io.Reader, out, errOut io.Writer, httpClient *http.Cl
 	}
 
 	client := gh.NewClient(httpClient, githubBaseURL, resolveToken(opts.GitHubToken))
+	if cacheDir != "" {
+		client.WithCacheDir(cacheDir)
+	}
 	report, changes, hadVerificationFailure, err := buildReport(context.Background(), scans, client, cooldown)
 	if err != nil {
 		fmt.Fprintf(errOut, "failed to build update plan: %v\n", err)

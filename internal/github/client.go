@@ -22,6 +22,7 @@ type Client struct {
 	cache      map[string][]actionspec.StableVersion
 	tagTimes   map[string]time.Time
 	now        func() time.Time
+	cacheDir   string
 }
 
 type Resolution struct {
@@ -131,6 +132,12 @@ func NewClient(httpClient *http.Client, baseURL, token string) *Client {
 	}
 }
 
+// WithCacheDir sets a custom cache directory for testing.
+func (c *Client) WithCacheDir(dir string) *Client {
+	c.cacheDir = dir
+	return c
+}
+
 func (c *Client) ResolveLatestMajor(ctx context.Context, repo string, currentMajor int, cooldown time.Duration) (Resolution, error) {
 	tags, err := c.stableTags(ctx, repo)
 	if err != nil {
@@ -177,6 +184,10 @@ func (c *Client) stableTags(ctx context.Context, repo string) ([]actionspec.Stab
 		return cached, nil
 	}
 
+	if cached, ok := c.loadCachedTags(repo); ok {
+		return cached, nil
+	}
+
 	var versions []actionspec.StableVersion
 	for page := 1; ; page++ {
 		endpoint, err := url.Parse(fmt.Sprintf("%s/repos/%s/tags", c.baseURL, repo))
@@ -211,6 +222,7 @@ func (c *Client) stableTags(ctx context.Context, repo string) ([]actionspec.Stab
 
 	slices.SortFunc(versions, compareStableVersionDesc)
 	c.cache[repo] = versions
+	c.storeCachedTags(repo, versions)
 	return versions, nil
 }
 
