@@ -1,0 +1,6 @@
+.DS_Store
+
+# Local build and test output
+/actupdate
+/dist/
+/coverage.out
