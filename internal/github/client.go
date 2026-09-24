@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"actupdate/internal/actionspec"
+	"github.com/qartik/actupdate/internal/actionspec"
 )
 
 const DefaultBaseURL = "https://api.github.com"

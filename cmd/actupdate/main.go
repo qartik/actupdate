@@ -15,10 +15,10 @@ import (
 	"strings"
 	"time"
 
-	"actupdate/internal/actionspec"
-	gh "actupdate/internal/github"
-	"actupdate/internal/plan"
-	"actupdate/internal/workflows"
+	"github.com/qartik/actupdate/internal/actionspec"
+	gh "github.com/qartik/actupdate/internal/github"
+	"github.com/qartik/actupdate/internal/plan"
+	"github.com/qartik/actupdate/internal/workflows"
 	"golang.org/x/term"
 )
 

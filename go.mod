@@ -1,4 +1,4 @@
-module actupdate
+module github.com/qartik/actupdate
 
 go 1.25.0
 

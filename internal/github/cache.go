@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"actupdate/internal/actionspec"
+	"github.com/qartik/actupdate/internal/actionspec"
 )
 
 const (
@@ -16,7 +16,7 @@ const (
 )
 
 type cacheEntry struct {
-	Timestamp time.Time         `json:"timestamp"`
+	Timestamp time.Time                  `json:"timestamp"`
 	Tags      []actionspec.StableVersion `json:"tags"`
 }
 
