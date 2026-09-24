@@ -1,5 +1,7 @@
 # actupdate
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/qartik/actupdate.svg)](https://pkg.go.dev/github.com/qartik/actupdate)
+
 `actupdate` updates GitHub Action references in workflow YAML files to the latest
 eligible stable version.
 
@@ -21,6 +23,16 @@ Run `actupdate` inside a git repo and it will:
 
 The tool skips local actions, Docker references, SHA pins, branch refs, and
 other non-semver references.
+
+## Installation
+
+Download a prebuilt binary from the
+[GitHub releases](https://github.com/qartik/actupdate/releases), or install the
+latest release with Go:
+
+```bash
+go install github.com/qartik/actupdate/cmd/actupdate@latest
+```
 
 ## Usage
 

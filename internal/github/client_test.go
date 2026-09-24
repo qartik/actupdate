@@ -14,7 +14,7 @@ import (
 	"testing/quick"
 	"time"
 
-	"actupdate/internal/actionspec"
+	"github.com/qartik/actupdate/internal/actionspec"
 )
 
 func TestResolveLatestStableReportsPublishedLatestMajor(t *testing.T) {

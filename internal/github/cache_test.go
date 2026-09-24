@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"actupdate/internal/actionspec"
+	"github.com/qartik/actupdate/internal/actionspec"
 )
 
 func TestCacheDir(t *testing.T) {
