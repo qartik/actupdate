@@ -36,6 +36,7 @@ actupdate --yes
 actupdate --include-composite-actions
 actupdate --cooldown-days 7
 actupdate --github-token "$GITHUB_TOKEN"
+actupdate --github-tls12
 actupdate version
 ```
 
@@ -48,6 +49,8 @@ Flags:
 - `--cooldown-days`: ignore candidate tags newer than the given number of days
 - `--github-token`: override token lookup; otherwise the tool uses
   `GITHUB_TOKEN`, then `GH_TOKEN`
+- `--github-tls12`: cap GitHub API connections at TLS 1.2 as an explicit
+  compatibility workaround
 
 Use `--cooldown-days` when you want to avoid immediately adopting freshly
 published action tags. For example, `actupdate --cooldown-days 7` only upgrades
@@ -64,6 +67,13 @@ If you already use `gh`, you can pass its token directly:
 ```bash
 GITHUB_TOKEN="$(gh auth token)" actupdate
 ```
+
+If GitHub API requests are reset only on a network with a TLS-inspecting
+firewall or middlebox, `--github-tls12` can work around an incompatibility with
+TLS 1.3 handshakes. This is opt-in because it lowers the maximum protocol
+version for GitHub API connections; certificate validation, proxy settings,
+authentication, and other default HTTP behavior remain enabled. Prefer the
+default, highest supported TLS version on networks where it works.
 
 ## Releases
 

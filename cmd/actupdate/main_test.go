@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -39,6 +40,51 @@ func TestParseArgsIncludeCompositeActions(t *testing.T) {
 	}
 	if !opts.IncludeCompositeActions {
 		t.Fatal("expected include composite actions to be enabled")
+	}
+}
+
+func TestParseArgsGitHubTLS12(t *testing.T) {
+	opts, err := parseArgs([]string{"--github-tls12"})
+	if err != nil {
+		t.Fatalf("parse args: %v", err)
+	}
+	if !opts.GitHubTLS12 {
+		t.Fatal("expected GitHub TLS 1.2 compatibility to be enabled")
+	}
+}
+
+func TestGitHubTLS12AppearsInHelp(t *testing.T) {
+	var output bytes.Buffer
+	fs, _ := newFlagSet(&output)
+	fs.Usage()
+	if got := output.String(); !strings.Contains(got, "github-tls12") || !strings.Contains(got, "cap GitHub API connections at TLS 1.2") {
+		t.Fatalf("expected GitHub TLS 1.2 flag in help, got %q", got)
+	}
+}
+
+func TestGitHubHTTPClientDefaultIsUnchanged(t *testing.T) {
+	original := &http.Client{Timeout: 2 * time.Second}
+	got, err := githubHTTPClient(original, false)
+	if err != nil {
+		t.Fatalf("configure GitHub HTTP client: %v", err)
+	}
+	if got != original {
+		t.Fatal("expected the default path to preserve the original client")
+	}
+}
+
+func TestGitHubHTTPClientTLS12CapsTLSVersion(t *testing.T) {
+	original := &http.Client{}
+	got, err := githubHTTPClient(original, true)
+	if err != nil {
+		t.Fatalf("configure GitHub HTTP client: %v", err)
+	}
+	transport, ok := got.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", got.Transport)
+	}
+	if transport.TLSClientConfig == nil || transport.TLSClientConfig.MaxVersion != tls.VersionTLS12 {
+		t.Fatalf("expected TLS maximum 1.2, got %#v", transport.TLSClientConfig)
 	}
 }
 

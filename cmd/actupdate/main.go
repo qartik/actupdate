@@ -38,6 +38,7 @@ type cliOptions struct {
 	Repo                    string
 	Yes                     bool
 	GitHubToken             string
+	GitHubTLS12             bool
 	CooldownDays            int
 	IncludeCompositeActions bool
 }
@@ -100,6 +101,11 @@ func run(args []string, in io.Reader, out, errOut io.Writer, httpClient *http.Cl
 		return exitInvalidInput
 	}
 
+	httpClient, err = githubHTTPClient(httpClient, opts.GitHubTLS12)
+	if err != nil {
+		fmt.Fprintf(errOut, "failed to configure GitHub TLS 1.2 compatibility: %v\n", err)
+		return exitOperationalError
+	}
 	client := gh.NewClient(httpClient, githubBaseURL, resolveToken(opts.GitHubToken))
 	if cacheDir != "" {
 		client.WithCacheDir(cacheDir)
@@ -143,6 +149,13 @@ func run(args []string, in io.Reader, out, errOut io.Writer, httpClient *http.Cl
 
 	fmt.Fprintln(out, "Applied updates successfully.")
 	return exitOK
+}
+
+func githubHTTPClient(client *http.Client, tls12 bool) (*http.Client, error) {
+	if !tls12 {
+		return client, nil
+	}
+	return gh.TLS12HTTPClient(client)
 }
 
 func parseArgs(args []string) (*cliOptions, error) {
@@ -191,6 +204,7 @@ Flags:
 	fs.StringVar(&opts.Repo, "repo", "", "path to repository root")
 	fs.BoolVar(&opts.Yes, "yes", false, "apply without prompting")
 	fs.StringVar(&opts.GitHubToken, "github-token", "", "GitHub token override")
+	fs.BoolVar(&opts.GitHubTLS12, "github-tls12", false, "cap GitHub API connections at TLS 1.2")
 	fs.IntVar(&opts.CooldownDays, "cooldown-days", 0, "minimum tag age in days before upgrading")
 	fs.BoolVar(&opts.IncludeCompositeActions, "include-composite-actions", false, "scan nested action.yml and action.yaml composite actions")
 	return fs, opts
