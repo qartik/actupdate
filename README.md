@@ -80,7 +80,7 @@ to tags that are at least seven days old.
 Run `actupdate --pin` to upgrade and pin action references, for example:
 
 ```yaml
-uses: Quantinuum/hugrverse-env/install-hugrenv-action@56d38e6cd70aa488833ef1bc5616133820f00f3b # v1.1.0
+uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 ```
 
 Pinned updates select the highest stable exact version tag (`vX.Y.Z` or
