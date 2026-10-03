@@ -22,6 +22,7 @@ type Entry struct {
 	Display  string
 	Status   Status
 	NewRef   string
+	NewTag   string
 	Reason   string
 }
 
@@ -87,11 +88,15 @@ func Render(report Report, options RenderOptions) string {
 			b.WriteString("  ")
 			switch entry.Status {
 			case StatusUpdate:
+				target := "@" + entry.NewRef
+				if entry.NewTag != "" {
+					target += " # " + entry.NewTag
+				}
 				b.WriteString(fmt.Sprintf(
 					"%s %s %s %s\n",
 					entry.Display,
 					style(options.Color, colorBoldGreen, "->"),
-					style(options.Color, colorBoldGreen, "@"+entry.NewRef),
+					style(options.Color, colorBoldGreen, target),
 					style(options.Color, colorDim, "("+entry.Reason+")"),
 				))
 			case StatusUnchanged:

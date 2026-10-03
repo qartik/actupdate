@@ -37,6 +37,7 @@ const shortRevisionLength = 12
 type cliOptions struct {
 	Repo                    string
 	Yes                     bool
+	Pin                     bool
 	GitHubToken             string
 	GitHubTLS12             bool
 	CooldownDays            int
@@ -110,7 +111,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer, httpClient *http.Cl
 	if cacheDir != "" {
 		client.WithCacheDir(cacheDir)
 	}
-	report, changes, hadVerificationFailure, err := buildReport(context.Background(), scans, client, cooldown)
+	report, changes, hadVerificationFailure, err := buildReport(context.Background(), scans, client, cooldown, opts.Pin)
 	if err != nil {
 		fmt.Fprintf(errOut, "failed to build update plan: %v\n", err)
 		return exitOperationalError
@@ -191,6 +192,8 @@ func newFlagSet(out io.Writer) (*flag.FlagSet, *cliOptions) {
 Updates GitHub Action references in .github/workflows/*.yml and *.yaml files
 to the latest eligible stable version. Use --include-composite-actions to also
 scan nested action.yml and action.yaml composite actions.
+Use --pin to write full commit SHAs with exact release version comments.
+Existing SHA pins with leading semver comments are upgraded automatically.
 
 Commands:
   actupdate [flags]
@@ -203,6 +206,7 @@ Flags:
 	opts := &cliOptions{}
 	fs.StringVar(&opts.Repo, "repo", "", "path to repository root")
 	fs.BoolVar(&opts.Yes, "yes", false, "apply without prompting")
+	fs.BoolVar(&opts.Pin, "pin", false, "pin tag references to full commit SHAs of eligible exact releases")
 	fs.StringVar(&opts.GitHubToken, "github-token", "", "GitHub token override")
 	fs.BoolVar(&opts.GitHubTLS12, "github-tls12", false, "cap GitHub API connections at TLS 1.2")
 	fs.IntVar(&opts.CooldownDays, "cooldown-days", 0, "minimum tag age in days before upgrading")
@@ -307,7 +311,7 @@ func useColor(out io.Writer) bool {
 	return term.IsTerminal(int(file.Fd()))
 }
 
-func buildReport(ctx context.Context, scans []workflows.FileScan, client *gh.Client, cooldown time.Duration) (plan.Report, []workflows.Change, bool, error) {
+func buildReport(ctx context.Context, scans []workflows.FileScan, client *gh.Client, cooldown time.Duration, pin bool) (plan.Report, []workflows.Change, bool, error) {
 	report := plan.Report{}
 	var changes []workflows.Change
 	hadVerificationFailure := false
@@ -346,14 +350,19 @@ func buildReport(ctx context.Context, scans []workflows.FileScan, client *gh.Cli
 				continue
 			}
 
-			if actionspec.IsCommitSHA(spec.Ref) {
+			alreadyPinned := actionspec.IsCommitSHA(spec.Ref)
+			if alreadyPinned && match.VersionHint == "" {
 				entry.Status = plan.StatusSkipped
-				entry.Reason = "commit SHA pin"
+				entry.Reason = "commit SHA pin without a stable semver comment"
 				report.Add(entry)
 				continue
 			}
 
-			currentVersion, err := actionspec.ParseStableVersion(spec.Ref)
+			currentRef := spec.Ref
+			if alreadyPinned {
+				currentRef = match.VersionHint
+			}
+			currentVersion, err := actionspec.ParseStableVersion(currentRef)
 			if err != nil {
 				entry.Status = plan.StatusSkipped
 				entry.Reason = "non-semver ref"
@@ -361,7 +370,13 @@ func buildReport(ctx context.Context, scans []workflows.FileScan, client *gh.Cli
 				continue
 			}
 
-			resolution, resolveErr := client.ResolveLatestStable(ctx, spec.Repo, currentVersion, cooldown)
+			var resolution gh.Resolution
+			var resolveErr error
+			if pin || alreadyPinned {
+				resolution, resolveErr = client.ResolvePinned(ctx, spec.Repo, currentVersion, alreadyPinned, cooldown)
+			} else {
+				resolution, resolveErr = client.ResolveLatestStable(ctx, spec.Repo, currentVersion, cooldown)
+			}
 			outcome := repoOutcome{Resolution: resolution, Err: resolveErr}
 
 			if outcome.Err != nil {
@@ -374,6 +389,9 @@ func buildReport(ctx context.Context, scans []workflows.FileScan, client *gh.Cli
 
 			if !outcome.Resolution.HasUpgrade {
 				entry.Status = plan.StatusUnchanged
+				if outcome.Resolution.Skipped {
+					entry.Status = plan.StatusSkipped
+				}
 				entry.Reason = outcome.Resolution.Reason
 				report.Add(entry)
 				continue
@@ -381,11 +399,13 @@ func buildReport(ctx context.Context, scans []workflows.FileScan, client *gh.Cli
 
 			entry.Status = plan.StatusUpdate
 			entry.NewRef = outcome.Resolution.TargetRef
+			entry.NewTag = outcome.Resolution.TargetTag
 			entry.Reason = outcome.Resolution.Reason
 			report.Add(entry)
 			changes = append(changes, workflows.Change{
 				Match:  match,
 				NewRef: outcome.Resolution.TargetRef,
+				NewTag: outcome.Resolution.TargetTag,
 			})
 		}
 	}

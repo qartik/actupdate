@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/qartik/actupdate/internal/actionspec"
 	"gopkg.in/yaml.v3"
 )
 
@@ -24,16 +25,21 @@ type FileScan struct {
 }
 
 type Match struct {
-	FilePath string
-	Value    string
-	Line     int
-	Start    int
-	End      int
+	FilePath     string
+	Value        string
+	Line         int
+	Start        int
+	End          int
+	CommentStart int
+	CommentEnd   int
+	Comment      string
+	VersionHint  string
 }
 
 type Change struct {
 	Match  Match
 	NewRef string
+	NewTag string
 }
 
 type DiscoverOptions struct {
@@ -135,18 +141,34 @@ func scanContent(path string, content []byte) []Match {
 	var matches []Match
 	offset := 0
 	for idx, line := range lines {
+		lineLength := len(line)
+		line = strings.TrimSuffix(line, "\r")
 		submatches := usesPattern.FindStringSubmatchIndex(line)
 		if submatches != nil {
 			valueStart, valueEnd := firstDefinedCapture(submatches, 4, 6, 8)
-			matches = append(matches, Match{
-				FilePath: path,
-				Value:    line[valueStart:valueEnd],
-				Line:     idx + 1,
-				Start:    offset + valueStart,
-				End:      offset + valueEnd,
-			})
+			match := Match{
+				FilePath:     path,
+				Value:        line[valueStart:valueEnd],
+				Line:         idx + 1,
+				Start:        offset + valueStart,
+				End:          offset + valueEnd,
+				CommentStart: offset + len(line),
+				CommentEnd:   offset + len(line),
+			}
+			if hash := strings.IndexByte(line[submatches[10]:submatches[11]], '#'); hash >= 0 {
+				start := submatches[10] + hash
+				match.CommentStart = offset + start
+				match.Comment = line[start:]
+				fields := strings.Fields(match.Comment[1:])
+				if len(fields) > 0 {
+					if _, err := actionspec.ParseStableVersion(fields[0]); err == nil {
+						match.VersionHint = fields[0]
+					}
+				}
+			}
+			matches = append(matches, match)
 		}
-		offset += len(line) + 1
+		offset += lineLength + 1
 	}
 	return matches
 }
@@ -189,6 +211,12 @@ func Apply(repoRoot string, changes []Change) error {
 			if change.Match.Start < 0 || change.Match.End > len(updated) || change.Match.Start > change.Match.End {
 				return fmt.Errorf("%s: invalid replacement range", change.Match.FilePath)
 			}
+			if change.NewTag != "" {
+				if change.Match.CommentStart < change.Match.End || change.Match.CommentEnd > len(updated) || change.Match.CommentStart > change.Match.CommentEnd {
+					return fmt.Errorf("%s: invalid comment replacement range", change.Match.FilePath)
+				}
+				updated = splice(updated, change.Match.CommentStart, change.Match.CommentEnd, []byte(pinComment(change.Match, change.NewTag)))
+			}
 			oldRef := string(updated[change.Match.Start:change.Match.End])
 			replaced := replaceRef(oldRef, change.NewRef)
 			updated = splice(updated, change.Match.Start, change.Match.End, []byte(replaced))
@@ -212,6 +240,21 @@ func Apply(repoRoot string, changes []Change) error {
 	}
 
 	return nil
+}
+
+func pinComment(match Match, tag string) string {
+	if match.Comment == "" {
+		return " # " + tag
+	}
+	if match.VersionHint != "" {
+		start := 1 + strings.Index(match.Comment[1:], match.VersionHint)
+		return match.Comment[:start] + tag + match.Comment[start+len(match.VersionHint):]
+	}
+	suffix := match.Comment[1:]
+	if suffix != "" && suffix[0] != ' ' && suffix[0] != '\t' {
+		suffix = " " + suffix
+	}
+	return "# " + tag + suffix
 }
 
 func replaceRef(value string, newRef string) string {
