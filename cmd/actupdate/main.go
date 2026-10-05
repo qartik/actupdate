@@ -111,15 +111,11 @@ func run(args []string, in io.Reader, out, errOut io.Writer, httpClient *http.Cl
 	if cacheDir != "" {
 		client.WithCacheDir(cacheDir)
 	}
-	report, changes, hadVerificationFailure, err := buildReport(context.Background(), scans, client, cooldown, opts.Pin)
-	if err != nil {
-		fmt.Fprintf(errOut, "failed to build update plan: %v\n", err)
-		return exitOperationalError
-	}
+	report, changes := buildReport(context.Background(), scans, client, cooldown, opts.Pin)
 
 	fmt.Fprint(out, plan.Render(report, plan.RenderOptions{Color: useColor(out)}))
 
-	if hadVerificationFailure {
+	if report.Counts.Errors > 0 {
 		return exitVerificationFailure
 	}
 	if report.Counts.Updates == 0 {
@@ -311,109 +307,72 @@ func useColor(out io.Writer) bool {
 	return term.IsTerminal(int(file.Fd()))
 }
 
-func buildReport(ctx context.Context, scans []workflows.FileScan, client *gh.Client, cooldown time.Duration, pin bool) (plan.Report, []workflows.Change, bool, error) {
+func buildReport(ctx context.Context, scans []workflows.FileScan, client *gh.Client, cooldown time.Duration, pin bool) (plan.Report, []workflows.Change) {
 	report := plan.Report{}
 	var changes []workflows.Change
-	hadVerificationFailure := false
-
 	for _, scan := range scans {
 		for _, match := range scan.Matches {
-			entry := plan.Entry{
-				FilePath: match.FilePath,
-				Line:     match.Line,
-				Display:  match.Value,
-			}
-
-			spec, err := actionspec.Parse(match.Value)
-			if err != nil {
-				entry.Status = plan.StatusSkipped
-				entry.Reason = "malformed action reference"
-				report.Add(entry)
-				continue
-			}
-
-			switch spec.Kind {
-			case actionspec.KindLocal:
-				entry.Status = plan.StatusSkipped
-				entry.Reason = "local action"
-				report.Add(entry)
-				continue
-			case actionspec.KindDocker:
-				entry.Status = plan.StatusSkipped
-				entry.Reason = "docker reference"
-				report.Add(entry)
-				continue
-			case actionspec.KindUnsupported:
-				entry.Status = plan.StatusSkipped
-				entry.Reason = "unsupported action reference"
-				report.Add(entry)
-				continue
-			}
-
-			alreadyPinned := actionspec.IsCommitSHA(spec.Ref)
-			if alreadyPinned && match.VersionHint == "" {
-				entry.Status = plan.StatusSkipped
-				entry.Reason = "commit SHA pin without a stable semver comment"
-				report.Add(entry)
-				continue
-			}
-
-			currentRef := spec.Ref
-			if alreadyPinned {
-				currentRef = match.VersionHint
-			}
-			currentVersion, err := actionspec.ParseStableVersion(currentRef)
-			if err != nil {
-				entry.Status = plan.StatusSkipped
-				entry.Reason = "non-semver ref"
-				report.Add(entry)
-				continue
-			}
-
-			var resolution gh.Resolution
-			var resolveErr error
-			if pin || alreadyPinned {
-				resolution, resolveErr = client.ResolvePinned(ctx, spec.Repo, currentVersion, alreadyPinned, cooldown)
-			} else {
-				resolution, resolveErr = client.ResolveLatestStable(ctx, spec.Repo, currentVersion, cooldown)
-			}
-			outcome := repoOutcome{Resolution: resolution, Err: resolveErr}
-
-			if outcome.Err != nil {
-				entry.Status = plan.StatusError
-				entry.Reason = outcome.Err.Error()
-				report.Add(entry)
-				hadVerificationFailure = true
-				continue
-			}
-
-			if !outcome.Resolution.HasUpgrade {
-				entry.Status = plan.StatusUnchanged
-				if outcome.Resolution.Skipped {
-					entry.Status = plan.StatusSkipped
-				}
-				entry.Reason = outcome.Resolution.Reason
-				report.Add(entry)
-				continue
-			}
-
-			entry.Status = plan.StatusUpdate
-			entry.NewRef = outcome.Resolution.TargetRef
-			entry.NewTag = outcome.Resolution.TargetTag
-			entry.Reason = outcome.Resolution.Reason
+			entry := planAction(ctx, match, client, cooldown, pin)
 			report.Add(entry)
-			changes = append(changes, workflows.Change{
-				Match:  match,
-				NewRef: outcome.Resolution.TargetRef,
-				NewTag: outcome.Resolution.TargetTag,
-			})
+			if entry.Status == plan.StatusUpdate {
+				changes = append(changes, workflows.Change{Match: match, NewRef: entry.NewRef, NewTag: entry.NewTag})
+			}
 		}
 	}
-
-	return report, changes, hadVerificationFailure, nil
+	return report, changes
 }
 
-type repoOutcome struct {
-	Resolution gh.Resolution
-	Err        error
+func planAction(ctx context.Context, match workflows.Match, client *gh.Client, cooldown time.Duration, pin bool) plan.Entry {
+	entry := plan.Entry{FilePath: match.FilePath, Line: match.Line, Display: match.Value, Status: plan.StatusSkipped}
+	spec, err := actionspec.Parse(match.Value)
+	if err != nil {
+		entry.Reason = "malformed action reference"
+		return entry
+	}
+	switch spec.Kind {
+	case actionspec.KindLocal:
+		entry.Reason = "local action"
+		return entry
+	case actionspec.KindDocker:
+		entry.Reason = "docker reference"
+		return entry
+	case actionspec.KindUnsupported:
+		entry.Reason = "unsupported action reference"
+		return entry
+	}
+	alreadyPinned := actionspec.IsCommitSHA(spec.Ref)
+	currentRef := spec.Ref
+	if alreadyPinned {
+		if match.VersionHint == "" {
+			entry.Reason = "commit SHA pin without a stable semver comment"
+			return entry
+		}
+		currentRef = match.VersionHint
+	}
+	currentVersion, err := actionspec.ParseStableVersion(currentRef)
+	if err != nil {
+		entry.Reason = "non-semver ref"
+		return entry
+	}
+	var resolution gh.Resolution
+	if pin || alreadyPinned {
+		resolution, err = client.ResolvePinned(ctx, spec.Repo, currentVersion, alreadyPinned, cooldown)
+	} else {
+		resolution, err = client.ResolveLatestStable(ctx, spec.Repo, currentVersion, cooldown)
+	}
+	if err != nil {
+		entry.Status = plan.StatusError
+		entry.Reason = err.Error()
+		return entry
+	}
+	entry.Reason = resolution.Reason
+	switch {
+	case resolution.HasUpgrade:
+		entry.Status = plan.StatusUpdate
+		entry.NewRef = resolution.TargetRef
+		entry.NewTag = resolution.TargetTag
+	case !resolution.Skipped:
+		entry.Status = plan.StatusUnchanged
+	}
+	return entry
 }

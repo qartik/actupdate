@@ -270,17 +270,8 @@ func (c *Client) annotatedTagTime(ctx context.Context, repo, sha string) (time.T
 }
 
 func (c *Client) commitTime(ctx context.Context, repo, sha string) (time.Time, error) {
-	endpoint, err := c.endpointURL(repo, "git", "commits", sha)
-	if err != nil {
-		return time.Time{}, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
-	if err != nil {
-		return time.Time{}, err
-	}
-
 	var commit gitCommitResponse
-	if err := c.getJSON(req, repo, fmt.Sprintf("commit %s not found", sha), &commit); err != nil {
+	if err := c.getRepositoryJSON(ctx, repo, fmt.Sprintf("commit %s not found", sha), &commit, "git", "commits", sha); err != nil {
 		return time.Time{}, err
 	}
 	if commit.Committer.Date != "" {
@@ -296,20 +287,39 @@ func (c *Client) ensureEligible(ctx context.Context, repo string, candidate *Can
 	if candidate.Eligibility != EligibilityUnknown {
 		return candidate.Eligibility == EligibilityEligible, nil
 	}
-	if cutoff.IsZero() {
-		candidate.Eligibility = EligibilityEligible
-		return true, nil
-	}
-	publishedAt, err := c.tagPublishedAt(ctx, repo, candidate.Version.Original)
+	eligible, err := c.tagEligible(ctx, repo, candidate.Version.Original, cutoff)
 	if err != nil {
 		return false, err
 	}
-	if publishedAt.After(cutoff) {
+	if !eligible {
 		candidate.Eligibility = EligibilityBlocked
 		return false, nil
 	}
 	candidate.Eligibility = EligibilityEligible
 	return true, nil
+}
+
+func (c *Client) tagEligible(ctx context.Context, repo, tag string, cutoff time.Time) (bool, error) {
+	if cutoff.IsZero() {
+		return true, nil
+	}
+	publishedAt, err := c.tagPublishedAt(ctx, repo, tag)
+	if err != nil {
+		return false, err
+	}
+	return !publishedAt.After(cutoff), nil
+}
+
+func (c *Client) getRepositoryJSON(ctx context.Context, repo, notFoundMessage string, out any, segments ...string) error {
+	endpoint, err := c.endpointURL(repo, segments...)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return err
+	}
+	return c.getJSON(req, repo, notFoundMessage, out)
 }
 
 func (c *Client) endpointURL(repo string, segments ...string) (*url.URL, error) {

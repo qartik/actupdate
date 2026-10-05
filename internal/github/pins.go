@@ -3,7 +3,6 @@ package github
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
@@ -31,8 +30,7 @@ func (c *Client) ResolvePinned(ctx context.Context, repo string, current actions
 		if comparison < 0 || (comparison == 0 && alreadyPinned && current.HasPatch) {
 			continue
 		}
-		candidate := &Candidate{Version: versionFromStable(tag)}
-		eligible, err := c.ensureEligible(ctx, repo, candidate, cutoff)
+		eligible, err := c.tagEligible(ctx, repo, tag.Original, cutoff)
 		if err != nil {
 			return Resolution{}, err
 		}
@@ -60,16 +58,8 @@ func (c *Client) tagRef(ctx context.Context, repo, tag string) (gitObject, error
 	if object, ok := c.refs[key]; ok {
 		return object, nil
 	}
-	endpoint, err := c.endpointURL(repo, "git", "ref", "tags", tag)
-	if err != nil {
-		return gitObject{}, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
-	if err != nil {
-		return gitObject{}, err
-	}
 	var ref gitRefResponse
-	if err := c.getJSON(req, repo, fmt.Sprintf("tag ref %s not found", tag), &ref); err != nil {
+	if err := c.getRepositoryJSON(ctx, repo, fmt.Sprintf("tag ref %s not found", tag), &ref, "git", "ref", "tags", tag); err != nil {
 		return gitObject{}, err
 	}
 	c.refs[key] = ref.Object
@@ -81,16 +71,8 @@ func (c *Client) annotatedTag(ctx context.Context, repo, sha string) (gitTagResp
 	if tag, ok := c.tagObjects[key]; ok {
 		return tag, nil
 	}
-	endpoint, err := c.endpointURL(repo, "git", "tags", sha)
-	if err != nil {
-		return gitTagResponse{}, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
-	if err != nil {
-		return gitTagResponse{}, err
-	}
 	var tag gitTagResponse
-	if err := c.getJSON(req, repo, fmt.Sprintf("annotated tag %s not found", sha), &tag); err != nil {
+	if err := c.getRepositoryJSON(ctx, repo, fmt.Sprintf("annotated tag %s not found", sha), &tag, "git", "tags", sha); err != nil {
 		return gitTagResponse{}, err
 	}
 	c.tagObjects[key] = tag

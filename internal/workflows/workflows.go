@@ -141,42 +141,47 @@ func scanContent(path string, content []byte) []Match {
 	var matches []Match
 	offset := 0
 	for idx, line := range lines {
-		lineLength := len(line)
-		lineOffset := offset
-		offset += lineLength + 1
-		line = strings.TrimSuffix(line, "\r")
-		submatches := usesPattern.FindStringSubmatchIndex(line)
-		if submatches != nil {
-			valueStart, valueEnd := firstDefinedCapture(submatches, 4, 6, 8)
-			match := Match{
-				FilePath:     path,
-				Value:        line[valueStart:valueEnd],
-				Line:         idx + 1,
-				Start:        lineOffset + valueStart,
-				End:          lineOffset + valueEnd,
-				CommentStart: lineOffset + len(line),
-				CommentEnd:   lineOffset + len(line),
-			}
-			if hash := strings.IndexByte(line[submatches[10]:submatches[11]], '#'); hash >= 0 {
-				start := submatches[10] + hash
-				// An unseparated hash belongs to the plain scalar, not a
-				// comment. Skip rather than rewrite a truncated reference.
-				if start == 0 || (line[start-1] != ' ' && line[start-1] != '\t') {
-					continue
-				}
-				match.CommentStart = lineOffset + start
-				match.Comment = line[start:]
-				fields := strings.Fields(match.Comment[1:])
-				if len(fields) > 0 {
-					if _, err := actionspec.ParseStableVersion(fields[0]); err == nil {
-						match.VersionHint = fields[0]
-					}
-				}
-			}
+		if match, ok := scanLine(strings.TrimSuffix(line, "\r")); ok {
+			match.FilePath = path
+			match.Line = idx + 1
+			match.Start += offset
+			match.End += offset
+			match.CommentStart += offset
+			match.CommentEnd += offset
 			matches = append(matches, match)
 		}
+		offset += len(line) + 1
 	}
 	return matches
+}
+
+// scanLine returns byte ranges relative to a line without its line ending.
+func scanLine(line string) (Match, bool) {
+	submatches := usesPattern.FindStringSubmatchIndex(line)
+	if submatches == nil {
+		return Match{}, false
+	}
+	valueStart, valueEnd := firstDefinedCapture(submatches, 4, 6, 8)
+	match := Match{Value: line[valueStart:valueEnd], Start: valueStart, End: valueEnd, CommentStart: len(line), CommentEnd: len(line)}
+	hash := strings.IndexByte(line[submatches[10]:submatches[11]], '#')
+	if hash < 0 {
+		return match, true
+	}
+	start := submatches[10] + hash
+	// An unseparated hash belongs to the plain scalar, not a comment.
+	// Skip rather than rewrite a truncated reference.
+	if start == 0 || (line[start-1] != ' ' && line[start-1] != '\t') {
+		return Match{}, false
+	}
+	match.CommentStart = start
+	match.Comment = line[start:]
+	fields := strings.Fields(match.Comment[1:])
+	if len(fields) > 0 {
+		if _, err := actionspec.ParseStableVersion(fields[0]); err == nil {
+			match.VersionHint = fields[0]
+		}
+	}
+	return match, true
 }
 
 func firstDefinedCapture(submatches []int, indices ...int) (int, int) {
@@ -208,24 +213,9 @@ func Apply(repoRoot string, changes []Change) error {
 			return err
 		}
 		originals[path] = original
-		sort.Slice(fileChanges, func(i, j int) bool {
-			return fileChanges[i].Match.Start > fileChanges[j].Match.Start
-		})
-
-		updated := append([]byte(nil), original...)
-		for _, change := range fileChanges {
-			if change.Match.Start < 0 || change.Match.End > len(updated) || change.Match.Start > change.Match.End {
-				return fmt.Errorf("%s: invalid replacement range", change.Match.FilePath)
-			}
-			if change.NewTag != "" {
-				if change.Match.CommentStart < change.Match.End || change.Match.CommentEnd > len(updated) || change.Match.CommentStart > change.Match.CommentEnd {
-					return fmt.Errorf("%s: invalid comment replacement range", change.Match.FilePath)
-				}
-				updated = splice(updated, change.Match.CommentStart, change.Match.CommentEnd, []byte(pinComment(change.Match, change.NewTag)))
-			}
-			oldRef := string(updated[change.Match.Start:change.Match.End])
-			replaced := replaceRef(oldRef, change.NewRef)
-			updated = splice(updated, change.Match.Start, change.Match.End, []byte(replaced))
+		updated, err := rewriteContent(original, fileChanges)
+		if err != nil {
+			return err
 		}
 
 		if err := writeAtomically(path, updated); err != nil {
@@ -246,6 +236,28 @@ func Apply(repoRoot string, changes []Change) error {
 	}
 
 	return nil
+}
+
+func rewriteContent(original []byte, changes []Change) ([]byte, error) {
+	sort.Slice(changes, func(i, j int) bool {
+		return changes[i].Match.Start > changes[j].Match.Start
+	})
+	updated := append([]byte(nil), original...)
+	for _, change := range changes {
+		match := change.Match
+		if match.Start < 0 || match.End > len(updated) || match.Start > match.End {
+			return nil, fmt.Errorf("%s: invalid replacement range", match.FilePath)
+		}
+		if change.NewTag != "" {
+			if match.CommentStart < match.End || match.CommentEnd > len(updated) || match.CommentStart > match.CommentEnd {
+				return nil, fmt.Errorf("%s: invalid comment replacement range", match.FilePath)
+			}
+			updated = splice(updated, match.CommentStart, match.CommentEnd, []byte(pinComment(match, change.NewTag)))
+		}
+		replaced := replaceRef(string(updated[match.Start:match.End]), change.NewRef)
+		updated = splice(updated, match.Start, match.End, []byte(replaced))
+	}
+	return updated, nil
 }
 
 func pinComment(match Match, tag string) string {
