@@ -142,6 +142,8 @@ func scanContent(path string, content []byte) []Match {
 	offset := 0
 	for idx, line := range lines {
 		lineLength := len(line)
+		lineOffset := offset
+		offset += lineLength + 1
 		line = strings.TrimSuffix(line, "\r")
 		submatches := usesPattern.FindStringSubmatchIndex(line)
 		if submatches != nil {
@@ -150,14 +152,19 @@ func scanContent(path string, content []byte) []Match {
 				FilePath:     path,
 				Value:        line[valueStart:valueEnd],
 				Line:         idx + 1,
-				Start:        offset + valueStart,
-				End:          offset + valueEnd,
-				CommentStart: offset + len(line),
-				CommentEnd:   offset + len(line),
+				Start:        lineOffset + valueStart,
+				End:          lineOffset + valueEnd,
+				CommentStart: lineOffset + len(line),
+				CommentEnd:   lineOffset + len(line),
 			}
 			if hash := strings.IndexByte(line[submatches[10]:submatches[11]], '#'); hash >= 0 {
 				start := submatches[10] + hash
-				match.CommentStart = offset + start
+				// An unseparated hash belongs to the plain scalar, not a
+				// comment. Skip rather than rewrite a truncated reference.
+				if start == 0 || (line[start-1] != ' ' && line[start-1] != '\t') {
+					continue
+				}
+				match.CommentStart = lineOffset + start
 				match.Comment = line[start:]
 				fields := strings.Fields(match.Comment[1:])
 				if len(fields) > 0 {
@@ -168,7 +175,6 @@ func scanContent(path string, content []byte) []Match {
 			}
 			matches = append(matches, match)
 		}
-		offset += lineLength + 1
 	}
 	return matches
 }

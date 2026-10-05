@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestScanFilesFindsUsesReferences(t *testing.T) {
@@ -38,6 +40,48 @@ func TestScanFilesFindsUsesReferences(t *testing.T) {
 	}
 	if len(scans) != 1 || len(scans[0].Matches) != 3 {
 		t.Fatalf("unexpected scan result: %+v", scans)
+	}
+}
+
+func TestScanRequiresSeparatedComments(t *testing.T) {
+	const sha = "0123456789abcdef0123456789abcdef01234567"
+	for _, tc := range []struct {
+		name, reference, suffix string
+		wantMatch               bool
+	}{
+		{"unseparated SHA", "owner/action@" + sha, "# v1.0.0", false},
+		{"unseparated tag", "owner/action@v1", "# v1.0.0", false},
+		{"space separated", "owner/action@" + sha, " # v1.0.0", true},
+		{"tab separated", "owner/action@" + sha, "\t# v1.0.0", true},
+		{"quoted separated", "\"owner/action@" + sha + "\"", " # v1.0.0", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			line := "uses: " + tc.reference + tc.suffix
+			var parsed map[string]string
+			if err := yaml.Unmarshal([]byte(line), &parsed); err != nil {
+				t.Fatal(err)
+			}
+			if !tc.wantMatch && parsed["uses"] != tc.reference+tc.suffix {
+				t.Fatalf("expected hash inside scalar, got %q", parsed["uses"])
+			}
+			// Ensure skipping the first line does not corrupt later byte offsets.
+			content := line + "\r\nuses: owner/action@v2 # v2.0.0\r\n"
+			matches := scanContent("test.yml", []byte(content))
+			wantCount := 1
+			if tc.wantMatch {
+				wantCount++
+			}
+			if len(matches) != wantCount {
+				t.Fatalf("unexpected matches: %+v", matches)
+			}
+			if tc.wantMatch && matches[0].VersionHint != "v1.0.0" {
+				t.Fatalf("lost annotation: %+v", matches[0])
+			}
+			last := matches[len(matches)-1]
+			if last.Line != 2 || content[last.Start:last.End] != "owner/action@v2 " || last.VersionHint != "v2.0.0" {
+				t.Fatalf("invalid subsequent match: %+v", last)
+			}
+		})
 	}
 }
 
