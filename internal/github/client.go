@@ -23,6 +23,8 @@ type Client struct {
 	tagTimes   map[string]time.Time
 	now        func() time.Time
 	cacheDir   string
+	refs       map[string]gitObject
+	tagObjects map[string]gitTagResponse
 }
 
 type Resolution struct {
@@ -30,6 +32,8 @@ type Resolution struct {
 	HasUpgrade  bool
 	Reason      string
 	LatestMajor int
+	TargetTag   string
+	Skipped     bool
 }
 
 type Precision int
@@ -104,6 +108,7 @@ type gitObject struct {
 
 type gitTagResponse struct {
 	Tagger gitSignature `json:"tagger"`
+	Object gitObject    `json:"object"`
 }
 
 type gitCommitResponse struct {
@@ -128,6 +133,8 @@ func NewClient(httpClient *http.Client, baseURL, token string) *Client {
 		token:      token,
 		cache:      map[string][]actionspec.StableVersion{},
 		tagTimes:   map[string]time.Time{},
+		refs:       map[string]gitObject{},
+		tagObjects: map[string]gitTagResponse{},
 		now:        time.Now,
 	}
 }
@@ -232,28 +239,19 @@ func (c *Client) tagPublishedAt(ctx context.Context, repo, tag string) (time.Tim
 		return cached, nil
 	}
 
-	refEndpoint, err := c.endpointURL(repo, "git", "ref", "tags", tag)
+	object, err := c.tagRef(ctx, repo, tag)
 	if err != nil {
-		return time.Time{}, err
-	}
-	refReq, err := http.NewRequestWithContext(ctx, http.MethodGet, refEndpoint.String(), nil)
-	if err != nil {
-		return time.Time{}, err
-	}
-
-	var ref gitRefResponse
-	if err := c.getJSON(refReq, repo, fmt.Sprintf("tag ref %s not found", tag), &ref); err != nil {
 		return time.Time{}, err
 	}
 
 	var publishedAt time.Time
-	switch ref.Object.Type {
+	switch object.Type {
 	case "tag":
-		publishedAt, err = c.annotatedTagTime(ctx, repo, ref.Object.SHA)
+		publishedAt, err = c.annotatedTagTime(ctx, repo, object.SHA)
 	case "commit":
-		publishedAt, err = c.commitTime(ctx, repo, ref.Object.SHA)
+		publishedAt, err = c.commitTime(ctx, repo, object.SHA)
 	default:
-		err = fmt.Errorf("%s: unsupported git ref object type %q for tag %s", repo, ref.Object.Type, tag)
+		err = fmt.Errorf("%s: unsupported git ref object type %q for tag %s", repo, object.Type, tag)
 	}
 	if err != nil {
 		return time.Time{}, err
@@ -264,34 +262,16 @@ func (c *Client) tagPublishedAt(ctx context.Context, repo, tag string) (time.Tim
 }
 
 func (c *Client) annotatedTagTime(ctx context.Context, repo, sha string) (time.Time, error) {
-	endpoint, err := c.endpointURL(repo, "git", "tags", sha)
+	tag, err := c.annotatedTag(ctx, repo, sha)
 	if err != nil {
-		return time.Time{}, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
-	if err != nil {
-		return time.Time{}, err
-	}
-
-	var tag gitTagResponse
-	if err := c.getJSON(req, repo, fmt.Sprintf("annotated tag %s not found", sha), &tag); err != nil {
 		return time.Time{}, err
 	}
 	return parseGitHubTime(repo, tag.Tagger.Date, "tagger")
 }
 
 func (c *Client) commitTime(ctx context.Context, repo, sha string) (time.Time, error) {
-	endpoint, err := c.endpointURL(repo, "git", "commits", sha)
-	if err != nil {
-		return time.Time{}, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
-	if err != nil {
-		return time.Time{}, err
-	}
-
 	var commit gitCommitResponse
-	if err := c.getJSON(req, repo, fmt.Sprintf("commit %s not found", sha), &commit); err != nil {
+	if err := c.getRepositoryJSON(ctx, repo, fmt.Sprintf("commit %s not found", sha), &commit, "git", "commits", sha); err != nil {
 		return time.Time{}, err
 	}
 	if commit.Committer.Date != "" {
@@ -307,20 +287,39 @@ func (c *Client) ensureEligible(ctx context.Context, repo string, candidate *Can
 	if candidate.Eligibility != EligibilityUnknown {
 		return candidate.Eligibility == EligibilityEligible, nil
 	}
-	if cutoff.IsZero() {
-		candidate.Eligibility = EligibilityEligible
-		return true, nil
-	}
-	publishedAt, err := c.tagPublishedAt(ctx, repo, candidate.Version.Original)
+	eligible, err := c.tagEligible(ctx, repo, candidate.Version.Original, cutoff)
 	if err != nil {
 		return false, err
 	}
-	if publishedAt.After(cutoff) {
+	if !eligible {
 		candidate.Eligibility = EligibilityBlocked
 		return false, nil
 	}
 	candidate.Eligibility = EligibilityEligible
 	return true, nil
+}
+
+func (c *Client) tagEligible(ctx context.Context, repo, tag string, cutoff time.Time) (bool, error) {
+	if cutoff.IsZero() {
+		return true, nil
+	}
+	publishedAt, err := c.tagPublishedAt(ctx, repo, tag)
+	if err != nil {
+		return false, err
+	}
+	return !publishedAt.After(cutoff), nil
+}
+
+func (c *Client) getRepositoryJSON(ctx context.Context, repo, notFoundMessage string, out any, segments ...string) error {
+	endpoint, err := c.endpointURL(repo, segments...)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return err
+	}
+	return c.getJSON(req, repo, notFoundMessage, out)
 }
 
 func (c *Client) endpointURL(repo string, segments ...string) (*url.URL, error) {

@@ -21,8 +21,12 @@ Run `actupdate` inside a git repo and it will:
 8. Prompt once before rewriting files; pressing Enter accepts the default and
    applies the changes
 
-The tool skips local actions, Docker references, SHA pins, branch refs, and
-other non-semver references.
+Use `--pin` to select exact releases and write immutable commit pins with
+version comments. Existing SHA pins with a leading semver comment are upgraded
+automatically and remain pinned, even without `--pin`.
+
+The tool skips local actions, Docker references, SHA pins without a leading
+semver comment, branch refs, and other non-semver references.
 
 ## Installation
 
@@ -45,6 +49,7 @@ Options:
 ```bash
 actupdate --repo /path/to/repo
 actupdate --yes
+actupdate --pin
 actupdate --include-composite-actions
 actupdate --cooldown-days 7
 actupdate --github-token "$GITHUB_TOKEN"
@@ -56,6 +61,8 @@ Flags:
 
 - `--repo`: operate on a different repo root instead of the current directory
 - `--yes`: apply immediately after printing the plan
+- `--pin`: convert tag references to full commit SHAs of eligible exact releases,
+  including references already on the latest release
 - `--include-composite-actions`: also scan nested `action.yml` and
   `action.yaml` files outside `.github/workflows`
 - `--cooldown-days`: ignore candidate tags newer than the given number of days
@@ -67,6 +74,32 @@ Flags:
 Use `--cooldown-days` when you want to avoid immediately adopting freshly
 published action tags. For example, `actupdate --cooldown-days 7` only upgrades
 to tags that are at least seven days old.
+
+## Immutable Commit Pins
+
+Run `actupdate --pin` to upgrade and pin action references, for example:
+
+```yaml
+uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+```
+
+Pinned updates select the highest stable exact version tag (`vX.Y.Z` or
+`X.Y.Z`), ignoring moving major/minor tags and prereleases. With
+`--cooldown-days`, the tool checks exact releases in descending version order
+and falls back to an older eligible release without downgrading the input
+version. Repositories without stable exact tags are skipped.
+
+SHA pins with comments beginning with a stable semver token, such as
+`# v1.1.0 explanation`, are upgraded automatically. The version comment is an
+update hint; the tool does not match bare SHA pins to historical tags. Moving
+version comments such as `# v1` migrate to eligible exact releases. Pins with
+exact version comments only advance to newer versions; repointing the same tag
+does not refresh an existing pin. Other comment text and YAML formatting are
+preserved.
+
+Pins always use full 40-character commit SHAs. GitHub Actions
+[does not support abbreviated SHAs](https://github.blog/changelog/2021-01-21-github-actions-short-sha-deprecation/)
+in `uses:` references.
 
 ## GitHub Auth
 
@@ -114,8 +147,9 @@ or `devel-<commit>` fallback when no release version is injected.
 - Updates move to the latest eligible stable version
 - `--cooldown-days` can exclude newer tags until they have aged past the
   configured threshold
-- Moving major tags such as `v6` are preferred first; moving minor tags such as
-  `v6.2` are preferred next; exact tags such as `v6.2.1` are the fallback
+- For normal tag updates, moving major tags such as `v6` are preferred first;
+  moving minor tags such as `v6.2` are preferred next; exact tags such as
+  `v6.2.1` are the fallback
 - Moving refs keep their precision within the same major, so `v3` is not
   rewritten to `v3.4` and `v3.4` is not rewritten to `v3.4.1`
 - Exact refs can upgrade within the same major, but representation-only changes

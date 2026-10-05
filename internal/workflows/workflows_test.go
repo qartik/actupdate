@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestScanFilesFindsUsesReferences(t *testing.T) {
@@ -38,6 +40,48 @@ func TestScanFilesFindsUsesReferences(t *testing.T) {
 	}
 	if len(scans) != 1 || len(scans[0].Matches) != 3 {
 		t.Fatalf("unexpected scan result: %+v", scans)
+	}
+}
+
+func TestScanRequiresSeparatedComments(t *testing.T) {
+	const sha = "0123456789abcdef0123456789abcdef01234567"
+	for _, tc := range []struct {
+		name, reference, suffix string
+		wantMatch               bool
+	}{
+		{"unseparated SHA", "owner/action@" + sha, "# v1.0.0", false},
+		{"unseparated tag", "owner/action@v1", "# v1.0.0", false},
+		{"space separated", "owner/action@" + sha, " # v1.0.0", true},
+		{"tab separated", "owner/action@" + sha, "\t# v1.0.0", true},
+		{"quoted separated", "\"owner/action@" + sha + "\"", " # v1.0.0", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			line := "uses: " + tc.reference + tc.suffix
+			var parsed map[string]string
+			if err := yaml.Unmarshal([]byte(line), &parsed); err != nil {
+				t.Fatal(err)
+			}
+			if !tc.wantMatch && parsed["uses"] != tc.reference+tc.suffix {
+				t.Fatalf("expected hash inside scalar, got %q", parsed["uses"])
+			}
+			// Ensure skipping the first line does not corrupt later byte offsets.
+			content := line + "\r\nuses: owner/action@v2 # v2.0.0\r\n"
+			matches := scanContent("test.yml", []byte(content))
+			wantCount := 1
+			if tc.wantMatch {
+				wantCount++
+			}
+			if len(matches) != wantCount {
+				t.Fatalf("unexpected matches: %+v", matches)
+			}
+			if tc.wantMatch && matches[0].VersionHint != "v1.0.0" {
+				t.Fatalf("lost annotation: %+v", matches[0])
+			}
+			last := matches[len(matches)-1]
+			if last.Line != 2 || content[last.Start:last.End] != "owner/action@v2 " || last.VersionHint != "v2.0.0" {
+				t.Fatalf("invalid subsequent match: %+v", last)
+			}
+		})
 	}
 }
 
@@ -197,5 +241,91 @@ func TestApplyRollsBackOnInvalidYAML(t *testing.T) {
 	}
 	if string(updated) != content {
 		t.Fatalf("expected rollback, got %q", string(updated))
+	}
+}
+
+func TestApplyPinsPreserveFormatting(t *testing.T) {
+	const sha = "0123456789abcdef0123456789abcdef01234567"
+	for _, tc := range []struct{ name, original, want string }{
+		{"plain", "  - uses: owner/action@v1\n", "  - uses: owner/action@" + sha + " # v2.1.0\n"},
+		{"quoted", "  - uses: 'owner/action/path@v1'  # explanation\n", "  - uses: 'owner/action/path@" + sha + "'  # v2.1.0 explanation\n"},
+		{"annotated", "  - uses: \"owner/action@" + sha + "\" # v1.0.0 keep this\n", "  - uses: \"owner/action@" + sha + "\" # v2.1.0 keep this\n"},
+		{"no comment space", "  - uses: 'owner/action@v1' #explanation\n", "  - uses: 'owner/action@" + sha + "' # v2.1.0 explanation\n"},
+		{"CRLF multiple replacements", "  - uses: owner/action@v1\r\n  - uses: owner/action/.github/workflows/test.yml@v1 # v1.0.0 notes\r\n", "  - uses: owner/action@" + sha + " # v2.1.0\r\n  - uses: owner/action/.github/workflows/test.yml@" + sha + " # v2.1.0 notes\r\n"},
+		{"no final newline", "  - uses: owner/action@v1", "  - uses: owner/action@" + sha + " # v2.1.0"},
+		{"tabs and trailing whitespace", "  - uses: \"owner/action@v1\"\t#\tv1.0.0\tcomment  \n", "  - uses: \"owner/action@" + sha + "\"\t#\tv2.1.0\tcomment  \n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := t.TempDir()
+			path := filepath.Join(repo, "test.yml")
+			if err := os.WriteFile(path, []byte(tc.original), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			scans, err := ScanFiles(repo, []string{path})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(scans[0].Matches) == 0 {
+				t.Fatal("no matches")
+			}
+			var changes []Change
+			for _, match := range scans[0].Matches {
+				changes = append(changes, Change{Match: match, NewRef: sha, NewTag: "v2.1.0"})
+			}
+			if err := Apply(repo, changes); err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("want %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestScanVersionHints(t *testing.T) {
+	for _, tc := range []struct{ comment, hint string }{
+		{"# v1.2.3 explanation", "v1.2.3"},
+		{"# 1.2.3", "1.2.3"},
+		{"# v1", "v1"},
+		{"# v1.2", "v1.2"},
+		{"# v1.2.3-rc1", ""},
+		{"# explanation v1.2.3", ""},
+		{"# v1.2.3, explanation", ""},
+		{"#", ""},
+	} {
+		matches := scanContent("test.yml", []byte("uses: owner/action@v1 "+tc.comment+"\n"))
+		if len(matches) != 1 || matches[0].VersionHint != tc.hint {
+			t.Errorf("%q: unexpected matches %+v", tc.comment, matches)
+		}
+	}
+}
+
+func TestApplyPinsRollsBackInvalidYAML(t *testing.T) {
+	repo := t.TempDir()
+	path := filepath.Join(repo, "test.yml")
+	original := "uses: owner/action@v1 # explanation\n"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	scans, err := ScanFiles(repo, []string{path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A multiline annotation must fail YAML validation and restore the original.
+	err = Apply(repo, []Change{{Match: scans[0].Matches[0], NewRef: "0123456789abcdef0123456789abcdef01234567", NewTag: "v2.0.0\ninvalid: ["}})
+	var invalid *InvalidYAMLError
+	if !errors.As(err, &invalid) {
+		t.Fatalf("expected invalid YAML, got %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original {
+		t.Fatalf("rollback failed: %q", got)
 	}
 }
